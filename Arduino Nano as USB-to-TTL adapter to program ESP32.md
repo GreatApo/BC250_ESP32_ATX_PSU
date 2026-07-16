@@ -1,8 +1,7 @@
 # Arduino Nano as a USB-to-TTL adapter to program your ESP32
 Tested with ESP32 Relay X2 (ESP32-32E N4 chipe)
 
-> **WARNING**
->
+> [!WARNING]
 > The Arduino Nano may pass 5V instead of 3.3V to TX. Some ESP32 board can take it but to it at your own risk.
 
 ## Prepare boards
