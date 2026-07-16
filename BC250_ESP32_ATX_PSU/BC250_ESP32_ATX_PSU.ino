@@ -8,11 +8,11 @@
 #include "esp_gap_bt_api.h"
 
 // ================= PIN SETTINGS =================
-const int RELAY_PWR_PIN = 17;     // (Left relay) BC-250 power button pins
-const int RELAY_PSU_PIN = 16;     // (Right relay) ATX PS_ON green wire to PSU ground
-const int BUTTON_PIN = 19;        // ORANGE wire: Physical button
-const int LED_PIN = 23;           // GREEN wire: Button LED
-const int PC_MONITOR_PIN = 4;     // RED wire (TPMS1 pin 9 / 3V): PC Monitor
+const int RELAY_PWR_PIN = 17;     // (Left relay) BC-250 power button pin + TPMS1 pin 17 (GND)
+const int RELAY_PSU_PIN = 16;     // (Right relay) ATX PS_ON green wire to PSU GND
+const int BUTTON_PIN = 19;        // Case power button
+const int LED_PIN = 23;           // LED
+const int PC_MONITOR_PIN = 4;     // BC250 TPMS1 pin 9 (3V - PC Monitor)
 
 const int RELAY_ON = HIGH;
 const int RELAY_OFF = LOW;
