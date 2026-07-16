@@ -46,7 +46,7 @@ For a normal shutdown, it pulses the motherboard power-button input and leaves t
 
 ESP32-C3 boards do not support Bluetooth Classic. Other ESP32 variants may also require changes to the Bluetooth APIs or pin assignments used by this sketch.
 
-## Pin assignment
+## Pin assignment & Wiring
 
 ![ESP32 to BC250 and ATX PSU connection](img/ESP32_to_BC250_ATX_PSU.JPG "ESP32 to BC250 and ATX PSU connection")
 
@@ -61,15 +61,13 @@ ESP32-C3 boards do not support Bluetooth Classic. Other ESP32 variants may also 
 
 The labels “left relay” and “right relay” in the sketch refer to the author's relay board layout. Trust the GPIO numbers and verify your own board's relay mapping rather than relying only on physical position.
 
-## Wiring
-
 ### ESP32 standby power
 
 The ESP32 and relay logic must remain powered when the main ATX rails are off:
 
 | ATX connection | Controller connection |
 | --- | --- |
-| Purple `+5VSB` | Relay-board/ESP32 5 V supply input appropriate for the board |
+| Purple `+5VSB` | Relay-board/ESP32 VCC or 5V supply input appropriate for the board |
 | Black ground | Relay-board/ESP32 `GND` |
 
 Check the exact relay board documentation before applying power. A terminal labelled `5V` may be an output on some integrated ESP32 relay boards rather than the intended supply input.
@@ -78,47 +76,26 @@ Check the exact relay board documentation before applying power. A terminal labe
 
 Use the normally-open contacts of the relay controlled by `GPIO 16`:
 
-- Relay `COM` to an ATX black ground wire.
-- Relay `NO` to the ATX green `PS_ON` wire.
+- Relay `COM` to the ATX green `PS_ON` wire.
+- Relay `NO` to an ATX black ground wire (`GND`).
 - Leave `NC` unused.
-
-When the relay closes, `PS_ON` is grounded and the main PSU rails turn on. Do not connect either relay contact to an ESP32 GPIO.
 
 ### Motherboard power-button relay
 
 Use the normally-open contacts of the relay controlled by `GPIO 17`:
 
 - Relay `COM` to one BC-250 power-button contact.
-- Relay `NO` to the other power-button contact.
+- Relay `NO` to the BC-250 TPMS1 pin 17 (`GND`).
 - Leave `NC` unused.
-
-This relay behaves like a brief press of a normal case power button.
 
 ### Physical button and LED
 
 - Connect a momentary button between `GPIO 19` and `GND`.
-- Connect the LED to `GPIO 23` using the correct polarity and a current-limiting resistor.
-- Keep GPIO current within the ESP32's limits. Use a transistor driver if the illuminated button requires more current than a GPIO can safely provide.
+- If you hav an external LED, Connect it to `GPIO 23` using the correct polarity and a current-limiting resistor.
 
 ### PC-state monitor
 
-- Connect the selected 3.3 V “PC on” signal to `GPIO 4`.
-- Connect the signal source ground to ESP32 ground.
-- Confirm with a multimeter that the signal is low while the PC is off and no higher than 3.3 V while it is on.
-
-The monitor input is essential to the intended safety behavior. Without a reliable signal, startup may time out and release the PSU, while shutdown detection and web status will be incorrect. Use a divider, level shifter, or optocoupler for any source above 3.3 V.
-
-## Software requirements
-
-- Arduino IDE 2.x or Arduino CLI.
-- Espressif's `esp32` Arduino boards package.
-- A board/core combination that provides:
-  - `BLEDevice`, `BLEUtils`, `BLEScan`, and `BLEAdvertisedDevice`
-  - `Preferences`
-  - `WiFi`
-  - ESP-IDF Bluetooth GAP API (`esp_gap_bt_api.h`)
-
-These libraries are supplied by the ESP32 Arduino core; no separate Arduino Library Manager packages should normally be required.
+- Connect the BC250 3.3V “PC on” signal to `GPIO 4`.
 
 ## Configure the sketch
 
