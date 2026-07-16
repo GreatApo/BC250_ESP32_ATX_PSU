@@ -1348,13 +1348,13 @@ void loop() {
     String statusLog = "DEBUG BUTTON=" + String(digitalRead(BUTTON_PIN)) +
     " RELAY_PWR=" + String(digitalRead(RELAY_PWR_PIN)) +
     " RELAY_PSU=" + String(digitalRead(RELAY_PSU_PIN));
-    */
     
     // DEBUG: periodically print button / PC / relay states for troubleshooting
     if (statusLog != lastStatusLog) {
         addLog(statusLog);
         lastStatusLog = statusLog;
     }
+    */
 
     // Update stable inputs and advance any in-progress relay sequence before
     // reacting to BLE or button events.
