@@ -1,4 +1,6 @@
-# BC250_ESP32_ATX_PSU
+# BC250 Power Controller (ESP32 ATX PSU)
+
+![BC250 ESP ATX PSU WebUI](img/webUI_PC.JPG "BC250 ESP ATX PSU WebUI")
 
 An ESP32-based power controller (with 2 relays) for a BC-250 motherboard running and controlling a standard ATX power supply. It lets a saved BLE or Bluetooth gamepad, a physical button, or a local web page start the system. It also coordinates the ATX `PS_ON` signal with the motherboard power-button input and monitors the PC's real power state for safer startup and shutdown handling.
 
@@ -13,10 +15,11 @@ An ESP32-based power controller (with 2 relays) for a BC-250 motherboard running
 - Wakes the BC-250 when a registered controller is detected over BLE or Bluetooth Classic.
 - Stores up to five controller MAC addresses in ESP32 non-volatile storage.
 - Provides web-based power controls, live state, controller management, RSSI filtering, and a rolling event log.
+- Saves router Wi-Fi settings from the web portal and applies them after a guarded controller restart.
 - Discovers nearby controllers from a built-in web interface.
 - Supports manual MAC-address registration when a controller is not discoverable.
 - Connects to a configured 2.4 GHz Wi-Fi network and falls back to its own setup access point if the connection fails.
-- Automatically retries the configured Wi-Fi network after a disconnect.
+- Keeps the fallback AP active after a failed or dropped router connection; another router attempt is made only when settings are saved again or the ESP32 boots.
 
 ## How it works
 
@@ -103,19 +106,21 @@ Open [`BC250_ESP32_ATX_PSU.ino`](BC250_ESP32_ATX_PSU.ino) and review the setting
 
 ### Wi-Fi and web portal
 
-Replace the example values with your own:
+These values are the first-boot defaults. Saved values from the web portal take priority:
 
 ```cpp
-const char* WIFI_SSID = "YOUR_2_4_GHZ_WIFI";
-const char* WIFI_PASSWORD = "YOUR_WIFI_PASSWORD";
+const char* DEFAULT_WIFI_SSID = "YOUR_2_4_GHZ_WIFI";
+const char* DEFAULT_WIFI_PASSWORD = "YOUR_WIFI_PASSWORD";
 const char* WEB_HOSTNAME = "bc250-controller";
 const char* WIFI_AP_PASSWORD = "CHOOSE_AN_8_PLUS_CHARACTER_PASSWORD";
 ```
 
 - The ESP32 Wi-Fi radio uses 2.4 GHz; a 5 GHz-only network will not work.
-- Set `WIFI_SSID` to an empty string to skip router Wi-Fi and always use the local access point.
+- Set `DEFAULT_WIFI_SSID` to an empty string to start with the local setup AP. Router credentials can then be entered in the portal.
 - Set `WIFI_AP_PASSWORD` to an empty string for an open AP, or use at least eight characters for a protected AP.
-- Change any credentials already committed in the sketch before publishing or sharing the repository. Treat previously committed credentials as exposed and rotate them at the router.
+- Router SSID and password changes made in the portal are stored in the ESP32 `Preferences` namespace `wifi_cfg` and survive restarts and power loss.
+- The portal never returns the saved password. A blank password field preserves it; select **Open network** to erase it deliberately.
+- The fallback AP name and password remain compile-time settings.
 
 The web server is plain HTTP and has no application-level login. Anyone who can reach it can operate the power controls and modify the controller list. Use it only on a trusted network and protect the fallback AP with a strong password.
 
@@ -167,13 +172,17 @@ If the ESP32 board has no onboard USB-to-serial interface, an Arduino Nano can b
 3. Power the controller from ATX `+5VSB` and ground, still with the control contacts disconnected.
 4. Watch Serial Monitor at `115200` baud for the assigned LAN address.
 5. If router Wi-Fi fails after about 20 seconds, join the access point named by `WEB_HOSTNAME` (default: `bc250-controller`) and open `http://192.168.4.1/`.
-6. Register a controller using the portal.
-7. Switch off and disconnect mains power, then wire the two relay contact pairs and PC monitor input.
-8. Recheck continuity, isolation, GPIO voltage, and relay idle states before reconnecting mains.
-9. Test web or physical-button power-on first, then test controller wake.
-10. Start a normal OS shutdown and confirm that `PS_ON` remains active until the monitor signal goes low.
+6. Enter the 2.4 GHz router SSID and password under **Wi-Fi & device**, then select **Save Wi-Fi**.
+7. While the PC state is off, select **Restart controller** to apply the saved settings. Reconnect through the new LAN address shown in Serial Monitor.
+8. Register a controller using the portal.
+9. Switch off and disconnect mains power, then wire the two relay contact pairs and PC monitor input.
+10. Recheck continuity, isolation, GPIO voltage, and relay idle states before reconnecting mains.
+11. Test web or physical-button power-on first, then test controller wake.
+12. Start a normal OS shutdown and confirm that `PS_ON` remains active until the monitor signal goes low.
 
 ## Web interface
+
+<img src="img/webUI_mobile_AP.png" alt="BC250 ESP ATX PSU WebUI" width="300"/>
 
 When connected to router Wi-Fi, open the IP address shown in Serial Monitor. Depending on your router and client, `http://bc250-controller.local/` may also work, but the sketch does not explicitly start an mDNS responder, so the numeric IP is the reliable option.
 
@@ -187,6 +196,8 @@ The portal provides:
 - A 15-second BLE/Bluetooth Classic scan for new devices.
 - Adjustable discovery RSSI threshold from -100 to -20 dBm.
 - Manual controller registration in `aa:bb:cc:dd:ee:ff` format.
+- Persistent 2.4 GHz router SSID/password configuration.
+- A guarded ESP32 restart button, enabled only while the PC is off and the power state machine is idle.
 - The latest 40 in-memory log lines.
 
 The page refreshes approximately every 1.5 seconds. Logs are held only in RAM and are cleared when the ESP32 restarts.
@@ -218,7 +229,7 @@ Some devices use private or rotating BLE addresses. Those devices may not wake r
 | Short press while PC is off | Starts the ATX power-on sequence |
 | Hold for at least 3 seconds while PC is on | Pulses the motherboard button for a normal shutdown |
 
-The sketch performs two short LED blinks when accepting a short press or the long-press threshold. In the current implementation, `updateStatusLed()` also toggles the LED every 250 ms continuously; it is therefore best treated as an activity/heartbeat indicator rather than a direct PC-power indicator.
+The sketch performs two short LED blinks when accepting a short press or the long-press threshold. The LED toggles every 250 ms continuously; it is therefore best treated as an activity/heartbeat indicator rather than a direct PC-power indicator.
 
 ## Default behavior and safeguards
 
@@ -244,6 +255,8 @@ The web UI uses a small unauthenticated HTTP API. It can also be called by trust
 | `POST` | `/api/manual-add?mac=aa%3Abb%3Acc%3Add%3Aee%3Aff` | Save a controller manually |
 | `POST` | `/api/remove?slot=0` | Remove a saved slot; slots are zero-based |
 | `POST` | `/api/rssi?value=-55` | Save discovery RSSI threshold |
+| `POST` | `/api/wifi/save?ssid=NAME&password=SECRET&clearPassword=0` | Save router Wi-Fi settings and make one connection attempt; blank password preserves the current one |
+| `POST` | `/api/restart` | Restart the ESP32; rejected while the PC is on or power control is busy |
 
 There is no authentication, TLS, CSRF protection, or network access control in the firmware. Do not expose port 80 to the internet.
 
@@ -283,6 +296,6 @@ There is no authentication, TLS, CSRF protection, or network access control in t
 
 - Controller compatibility depends on discoverable Bluetooth behavior and stable device addresses.
 - The web UI and API are intended only for a trusted local network.
-- Wi-Fi configuration is compiled into the firmware; there is no captive portal or browser-based credential editor.
-- The fallback AP offers the same management page, but it does not configure router credentials.
+- The portal can save router credentials, but it is not a captive portal and cannot scan for nearby Wi-Fi networks.
+- Changing the fallback AP name/password or hostname still requires editing and reflashing the firmware.
 - Saved controllers are managed through the web page; there is no physical factory-reset control in this version.

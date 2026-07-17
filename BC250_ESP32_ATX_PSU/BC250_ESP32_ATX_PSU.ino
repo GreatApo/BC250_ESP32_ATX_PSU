@@ -18,11 +18,15 @@ const int RELAY_ON = HIGH;
 const int RELAY_OFF = LOW;
 
 // ================= WIFI / WEB UI SETTINGS =================
-// Fill in WiFi to enable the controller management webpage.
-const char* WIFI_SSID = "";
-const char* WIFI_PASSWORD = "";
+// These are first-boot defaults. Values saved from the webpage take priority.
+const char* DEFAULT_WIFI_SSID = "";
+const char* DEFAULT_WIFI_PASSWORD = "";
 const char* WEB_HOSTNAME = "bc250-controller";
 const char* WIFI_AP_PASSWORD = "12345678"; // Leave empty for an open setup AP, or use 8+ chars.
+const char* WIFI_CONFIG_NAMESPACE = "wifi_cfg";
+
+String wifiSsid = DEFAULT_WIFI_SSID;
+String wifiPassword = DEFAULT_WIFI_PASSWORD;
 
 WiFiServer server(80);
 
@@ -47,7 +51,6 @@ const unsigned long PSU_SETTLE_BEFORE_PWR_SW_MS = 1000; // Wait after asserting 
 const unsigned long POWER_BUTTON_PRESS_MS = 500;        // How long to hold the motherboard power button relay
 const unsigned long STARTUP_CONFIRM_TIMEOUT_MS = 15000; // Give the PC this long to report ON after wake
 const unsigned long WIFI_CONNECT_TIMEOUT_MS = 20000;    // Try station WiFi this long before starting the fallback AP
-const unsigned long WIFI_RECONNECT_INTERVAL_MS = 30000; // Retry router WiFi this often after a drop
 const unsigned long BLE_SCAN_INTERVAL_MS = 2500;        // Leave WiFi airtime between blocking BLE scans
 const unsigned long CLASSIC_SCAN_INTERVAL_MS = 10000;   // Bluetooth Classic inquiry is longer and heavier than BLE scan
 const uint8_t CLASSIC_INQUIRY_DURATION = 4;             // Inquiry duration in 1.28s units (4 = about 5.1s)
@@ -80,13 +83,16 @@ unsigned long buttonPressStartTime = 0;
 unsigned long lastWakeTime = 0; // Time PC was last woken up by a known controller
 unsigned long lastBleScanTime = 0;
 unsigned long lastClassicScanTime = 0;
-unsigned long lastWifiReconnectAttempt = 0;
 bool classicDiscoveryRunning = false;
+bool classicDiscoveryCancelRequested = false;
 
 bool setupApRunning = false;
 bool routerWifiWasConnected = false;
 bool routerWifiRetrying = false;
 unsigned long wifiRetryStartedAt = 0;
+bool wifiConnectRequested = false;
+bool restartRequested = false;
+unsigned long restartRequestedAt = 0;
 
 // --- LED BLINK TIMERS ---
 unsigned long lastBlinkTime = 0;
@@ -518,6 +524,7 @@ void classicGapCallback(esp_bt_gap_cb_event_t event, esp_bt_gap_cb_param_t* para
             //addLog("Classic Bluetooth inquiry started.");
         } else if (param->disc_st_chg.state == ESP_BT_GAP_DISCOVERY_STOPPED) {
             classicDiscoveryRunning = false;
+            classicDiscoveryCancelRequested = false;
             //addLog("Classic Bluetooth inquiry finished.");
         }
     }
@@ -532,6 +539,24 @@ void setupClassicBluetooth() {
     }
 }
 
+bool setupApHasClient() {
+    return setupApRunning && WiFi.softAPgetStationNum() > 0;
+}
+
+void protectSetupApClient() {
+    // WiFi and Bluetooth share the ESP32's 2.4 GHz radio. A Classic inquiry
+    // lasts about five seconds and can make a setup-AP client appear to be
+    // disconnected. Pause normal wake discovery while the portal is in use.
+    // An explicit scan requested from the webpage is still allowed.
+    if (!setupApHasClient() || webScanActive) return;
+
+    if (classicDiscoveryRunning && !classicDiscoveryCancelRequested) {
+        if (esp_bt_gap_cancel_discovery() == ESP_OK) {
+            classicDiscoveryCancelRequested = true;
+        }
+    }
+}
+
 void scanClassicBluetooth() {
     unsigned long now = millis();
 
@@ -542,6 +567,8 @@ void scanClassicBluetooth() {
         addLog("Web controller scan finished.");
     }
 
+    if (!webScanActive && setupApHasClient()) return;
+
     if (!webScanActive) {
         if (stablePcOn) return;
         if (!hasSavedController()) return;
@@ -551,6 +578,7 @@ void scanClassicBluetooth() {
     if (bleScanRunning) return;
     if (now - lastClassicScanTime < CLASSIC_SCAN_INTERVAL_MS) return;
     lastClassicScanTime = now;
+    classicDiscoveryCancelRequested = false;
 
     esp_err_t result = esp_bt_gap_start_discovery(ESP_BT_INQ_MODE_GENERAL_INQUIRY, CLASSIC_INQUIRY_DURATION, 0);
     if (result != ESP_OK) {
@@ -685,6 +713,8 @@ void scanBle() {
         addLog("BLE - Forced scan finished.");
     }
 
+    if (!webScanActive && setupApHasClient()) return;
+
     // Web scans must always scan so the user can discover new controllers.
     // Normal wake scanning is only useful while the PC is off and at least one
     // saved controller exists.
@@ -767,6 +797,39 @@ String wifiStatusName(wl_status_t status) {
         case WL_IDLE_STATUS: return "idle";
         default: return "status " + String((int)status);
     }
+}
+
+void loadWiFiSettings() {
+    preferences.begin(WIFI_CONFIG_NAMESPACE, true);
+    wifiSsid = preferences.getString("ssid", DEFAULT_WIFI_SSID);
+    wifiPassword = preferences.getString("password", DEFAULT_WIFI_PASSWORD);
+    preferences.end();
+}
+
+bool saveWiFiSettings(const String& ssid, const String& password, bool replacePassword) {
+    if (ssid.length() > 32) return false;
+    if (replacePassword && password.length() > 63) return false;
+    if (replacePassword && password.length() > 0 && password.length() < 8) return false;
+
+    wifiSsid = ssid;
+    if (replacePassword) wifiPassword = password;
+
+    preferences.begin(WIFI_CONFIG_NAMESPACE, false);
+    preferences.putString("ssid", wifiSsid);
+    if (replacePassword) preferences.putString("password", wifiPassword);
+    preferences.end();
+    return true;
+}
+
+String wifiConfigJson() {
+    String json = "{\"ssid\":\"";
+    json += jsonEscape(wifiSsid);
+    json += "\",\"hasPassword\":";
+    json += wifiPassword.length() > 0 ? "true" : "false";
+    json += ",\"hostname\":\"";
+    json += jsonEscape(WEB_HOSTNAME);
+    json += "\"}";
+    return json;
 }
 
 void startSetupAp() {
@@ -856,110 +919,303 @@ String queryParam(const String& query, const String& key) {
 void handleWebRoot(WiFiClient& client) {
     static const char page[] PROGMEM = R"rawliteral(
 <!doctype html>
-<html>
+<html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#0a1018">
   <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🎮</text></svg>">
-  <title>BC250 Controller Portal</title>
+  <title>BC250 Control Panel</title>
   <style>
-    :root { color-scheme: dark; font-family: system-ui, sans-serif; background: #111; color: #eee; }
-    body { margin: 0; padding: 18px; max-width: 760px; margin-inline: auto; }
-    h1 { font-size: 1.45rem; margin: 0 0 14px; }
-    h2 { font-size: 1rem; margin: 24px 0 8px; color: #bbb; }
-    .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
-    .panel { border: 1px solid #333; border-radius: 8px; padding: 12px; margin: 10px 0; background: #181818; }
-    button { border: 0; border-radius: 6px; padding: 10px 12px; background: #2f7df6; color: white; font-weight: 700; cursor: pointer; }
-    button.danger { background: #b83d3d; }
-    button.secondary { background: #444; }
-    button:disabled { opacity: .5; }
-    input { border: 1px solid #444; border-radius: 6px; padding: 10px; background: #101010; color: #eee; }
-    .muted { color: #999; }
-    .item { display: flex; justify-content: space-between; gap: 8px; align-items: center; border-top: 1px solid #2b2b2b; padding: 10px 0; }
-    .item:first-child { border-top: 0; }
-    code { font-size: .95rem; }
-    pre { margin: 0; white-space: pre-wrap; word-break: break-word; max-height: 260px; overflow: auto; font-size: .85rem; line-height: 1.35; }
+    :root {
+      color-scheme: dark;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: #080d14;
+      color: #e8eef6;
+      --bg: #080d14;
+      --surface: #101823;
+      --surface-2: #151f2c;
+      --line: #243244;
+      --muted: #8695a8;
+      --blue: #4c91ff;
+      --blue-2: #2776ee;
+      --green: #45d48a;
+      --red: #ff6470;
+      --amber: #f4b84a;
+      --radius: 16px;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background:
+        radial-gradient(circle at 8% 0%, rgba(47, 119, 238, .15), transparent 30rem),
+        var(--bg);
+    }
+    button, input { font: inherit; }
+    button { -webkit-tap-highlight-color: transparent; }
+    .shell { width: min(1180px, calc(100% - 32px)); margin: 0 auto; padding: 28px 0 44px; }
+    header { display: flex; align-items: center; justify-content: space-between; gap: 20px; margin-bottom: 24px; }
+    .brand { display: flex; align-items: center; gap: 13px; }
+    .brand-mark {
+      display: grid; place-items: center; width: 44px; height: 44px; border: 1px solid #3169a9;
+      border-radius: 13px; background: linear-gradient(145deg, #1c58a0, #163353); color: #fff;
+      box-shadow: 0 10px 32px rgba(20, 88, 166, .25);
+    }
+    .brand-mark svg { width: 24px; }
+    h1 { font-size: 1.1rem; letter-spacing: .01em; margin: 0 0 2px; }
+    .subtitle, .muted { color: var(--muted); }
+    .subtitle { font-size: .79rem; }
+    .live { display: flex; align-items: center; gap: 8px; font-size: .78rem; color: var(--muted); }
+    .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--amber); box-shadow: 0 0 0 4px rgba(244, 184, 74, .1); }
+    .dot.online { background: var(--green); box-shadow: 0 0 0 4px rgba(69, 212, 138, .1); }
+    .dot.offline { background: var(--red); box-shadow: 0 0 0 4px rgba(255, 100, 112, .1); }
+    .overview { display: grid; grid-template-columns: 1.35fr repeat(3, 1fr); gap: 12px; margin-bottom: 12px; }
+    .card { border: 1px solid var(--line); border-radius: var(--radius); background: rgba(16, 24, 35, .94); box-shadow: 0 14px 36px rgba(0, 0, 0, .16); }
+    .metric { min-height: 112px; padding: 18px; display: flex; flex-direction: column; justify-content: space-between; }
+    .metric-label { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: .72rem; font-weight: 700; letter-spacing: .09em; text-transform: uppercase; }
+    .metric-label svg { width: 15px; color: #9eb0c5; }
+    .metric-value { display: flex; align-items: baseline; gap: 8px; font-size: 1.3rem; font-weight: 750; }
+    .metric-value small { color: var(--muted); font-size: .72rem; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .power-metric { background: linear-gradient(120deg, rgba(32, 64, 103, .72), rgba(16, 24, 35, .95)); }
+    #pc.on { color: var(--green); }
+    #pc.off { color: #aeb9c6; }
+    .layout { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(320px, .75fr); gap: 12px; align-items: start; }
+    .stack { display: grid; gap: 12px; }
+    .panel { padding: 20px; }
+    .panel-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; margin-bottom: 18px; }
+    .panel-title { display: flex; align-items: center; gap: 9px; }
+    .panel-title svg { width: 18px; color: var(--blue); }
+    h2 { margin: 0; font-size: .93rem; letter-spacing: .01em; }
+    .eyebrow { margin-top: 4px; color: var(--muted); font-size: .76rem; }
+    .badge { padding: 5px 9px; border: 1px solid var(--line); border-radius: 999px; background: #0d1520; color: var(--muted); font-size: .7rem; font-weight: 700; white-space: nowrap; }
+    .badge.active { border-color: rgba(69, 212, 138, .35); background: rgba(69, 212, 138, .09); color: var(--green); }
+    .power-controls { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+    button {
+      min-height: 42px; padding: 10px 15px; border: 1px solid transparent; border-radius: 10px;
+      background: linear-gradient(180deg, var(--blue), var(--blue-2)); color: white; font-weight: 750; cursor: pointer;
+      transition: transform .15s ease, border-color .15s ease, filter .15s ease;
+    }
+    button:hover:not(:disabled) { filter: brightness(1.09); transform: translateY(-1px); }
+    button:active:not(:disabled) { transform: translateY(0); }
+    button:focus-visible, input:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+    button:disabled { opacity: .42; cursor: not-allowed; }
+    button.secondary { border-color: #34455a; background: #1a2736; color: #d8e2ee; }
+    button.danger { border-color: rgba(255, 100, 112, .34); background: rgba(255, 100, 112, .1); color: #ff8790; }
+    button.compact { min-height: 34px; padding: 7px 11px; font-size: .76rem; }
+    .control-button { min-height: 74px; display: flex; align-items: center; justify-content: center; gap: 10px; }
+    .control-button svg { width: 19px; }
+    .control-button.danger { background: linear-gradient(180deg, #c94855, #a93440); border-color: transparent; color: white; }
+    .section-rule { height: 1px; background: var(--line); margin: 18px 0; }
+    .row { display: flex; gap: 9px; align-items: center; flex-wrap: wrap; }
+    .field-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 9px; }
+    label.field { display: block; margin: 13px 0 6px; color: #a6b4c5; font-size: .76rem; font-weight: 650; }
+    input {
+      width: 100%; min-height: 42px; border: 1px solid #334358; border-radius: 10px;
+      padding: 9px 12px; background: #0b121b; color: #edf3f9;
+    }
+    input::placeholder { color: #5f7084; }
+    input[type="number"] { width: 92px; }
+    input[type="checkbox"] { width: 16px; min-height: auto; accent-color: var(--blue); }
+    .check-row { margin-top: 12px; color: #b4c0ce; font-size: .78rem; }
+    .hint { margin-top: 8px; color: var(--muted); font-size: .72rem; line-height: 1.5; }
+    .item { display: flex; justify-content: space-between; gap: 12px; align-items: center; border-top: 1px solid #202d3c; padding: 12px 0; }
+    .item:first-child { border-top: 0; padding-top: 0; }
+    .item:last-child { padding-bottom: 0; }
+    .item-name { margin-bottom: 3px; font-size: .84rem; font-weight: 700; }
+    .item-meta { color: var(--muted); font-size: .72rem; }
+    code { color: #aec4dc; font-family: "SFMono-Regular", Consolas, monospace; font-size: .72rem; }
+    .empty { padding: 18px; border: 1px dashed #2c3c50; border-radius: 11px; color: var(--muted); text-align: center; font-size: .78rem; }
+    .scan-tools { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 13px; }
+    .rssi-tools { display: flex; gap: 8px; align-items: center; }
+    .rssi-tools label { color: var(--muted); font-size: .72rem; }
+    .network-status { display: flex; gap: 11px; align-items: center; padding: 12px; border: 1px solid #29384b; border-radius: 11px; background: #0c141e; }
+    .network-status svg { width: 21px; color: var(--green); flex: 0 0 auto; }
+    #wifiState { font-size: .82rem; font-weight: 700; }
+    #wifiAddress { margin-top: 2px; font-size: .7rem; word-break: break-all; }
+    .message { min-height: 18px; margin-top: 9px; color: var(--muted); font-size: .72rem; }
+    .restart-row { display: flex; justify-content: space-between; gap: 12px; align-items: center; }
+    .log-panel { overflow: hidden; }
+    .log-toolbar { padding: 14px 17px; border-bottom: 1px solid var(--line); display: flex; justify-content: space-between; align-items: center; }
+    .terminal-dots { display: flex; gap: 5px; }
+    .terminal-dots i { width: 7px; height: 7px; border-radius: 50%; background: #405064; }
+    pre { margin: 0; min-height: 160px; max-height: 290px; padding: 16px 17px; overflow: auto; white-space: pre-wrap; word-break: break-word; color: #a7b8ca; background: #090f17; font: .7rem/1.55 "SFMono-Regular", Consolas, monospace; }
+    .toast { position: fixed; right: 20px; bottom: 20px; z-index: 10; max-width: min(360px, calc(100% - 40px)); padding: 11px 14px; border: 1px solid #355072; border-radius: 10px; background: #152335; color: #e9f2fc; box-shadow: 0 14px 40px rgba(0,0,0,.35); font-size: .78rem; opacity: 0; transform: translateY(10px); pointer-events: none; transition: .2s ease; }
+    .toast.show { opacity: 1; transform: translateY(0); }
+    @media (max-width: 860px) {
+      .overview { grid-template-columns: 1fr 1fr; }
+      .layout { grid-template-columns: 1fr; }
+    }
+    @media (max-width: 540px) {
+      .shell { width: min(100% - 20px, 1180px); padding-top: 18px; }
+      header { margin-bottom: 18px; }
+      .overview { gap: 9px; }
+      .metric { min-height: 98px; padding: 14px; }
+      .metric-value { font-size: 1.08rem; }
+      .panel { padding: 16px; }
+      .power-controls { grid-template-columns: 1fr; }
+      .control-button { min-height: 54px; }
+      .scan-tools { align-items: flex-start; flex-direction: column; }
+      .field-row { grid-template-columns: 1fr; }
+      .restart-row { align-items: flex-start; flex-direction: column; }
+      .restart-row button { width: 100%; }
+    }
   </style>
 </head>
 <body>
-  <h1>BC250 Controller Portal</h1>
-  
-  <h2>⏻ Status</h2>
-  <div class="panel">
-    <div class="row">
-      <strong>PC status:</strong><span id="pc">...</span>
-      <span class="muted" id="powerState"></span>
-    </div>
-    <div class="row" style="margin-top:12px">
-      <button id="powerOnBtn" onclick="post('/api/power/on')">Power on</button>
-      <button id="powerOffBtn" class="danger" onclick="post('/api/power/off')">Power off</button>
-    </div>
-  </div>
+  <main class="shell">
+    <header>
+      <div class="brand">
+        <div class="brand-mark" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M7.5 8h9a4 4 0 0 1 3.8 2.8l1.3 4.2a2.4 2.4 0 0 1-4.1 2.3l-1.7-1.8H8.2l-1.7 1.8A2.4 2.4 0 0 1 2.4 15l1.3-4.2A4 4 0 0 1 7.5 8Z"/><path d="M8 11v4M6 13h4M15.5 12.5h.01M18 14h.01"/></svg></div>
+        <div><h1>BC250 Control Panel</h1><div class="subtitle">ESP32 power &amp; controller management</div></div>
+      </div>
+      <div class="live"><span id="liveDot" class="dot"></span><span id="liveText">Connecting</span></div>
+    </header>
 
-  <h2>🎮 Registered Controllers</h2>
-  <div class="panel" id="paired"></div>
+    <section class="overview" aria-label="System overview">
+      <div class="card metric power-metric"><div class="metric-label"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v10M18.4 6.6a9 9 0 1 1-12.8 0"/></svg>System power</div><div class="metric-value"><span id="pc">...</span><small id="powerState">Waiting for controller</small></div></div>
+      <div class="card metric"><div class="metric-label"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9h12a4 4 0 0 1 3.8 5.2l-1 3a2 2 0 0 1-3.3.8l-2-2H8.5l-2 2a2 2 0 0 1-3.3-.8l-1-3A4 4 0 0 1 6 9Z"/></svg>Controllers</div><div class="metric-value"><span id="controllerCount">—</span><small>registered</small></div></div>
+      <div class="card metric"><div class="metric-label"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12.5a10 10 0 0 1 14 0M8.5 16a5 5 0 0 1 7 0M12 20h.01"/></svg>Network</div><div class="metric-value"><span id="networkSummary">—</span><small id="networkIp">No address</small></div></div>
+      <div class="card metric"><div class="metric-label"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 12h3l2-6 4 12 2-6h5"/></svg>Activity</div><div class="metric-value"><span id="activitySummary">Idle</span><small id="lastUpdate">Not updated</small></div></div>
+    </section>
 
-  <h2>➕ Add controller manually</h2>
-  <div class="panel">
-    <div class="row">
-      <input id="manualMac" placeholder="aa:bb:cc:dd:ee:ff" maxlength="17">
-      <button onclick="manualAdd()">Add</button>
-    </div>
-    <div class="muted" style="margin-top:8px">Use this when a controller does not appear during scan.</div>
-  </div>
+    <div class="layout">
+      <div class="stack">
+        <section class="card panel">
+          <div class="panel-head"><div><div class="panel-title"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v10M18.4 6.6a9 9 0 1 1-12.8 0"/></svg><h2>Power control</h2></div><div class="eyebrow">Operate the ATX PSU and motherboard power switch</div></div><span id="powerBadge" class="badge">Checking</span></div>
+          <div class="power-controls">
+            <button id="powerOnBtn" class="control-button" onclick="post('/api/power/on', 'Power-on command sent')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v10M18.4 6.6a9 9 0 1 1-12.8 0"/></svg>Power on</button>
+            <button id="powerOffBtn" class="control-button danger" onclick="powerOff()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v10M18.4 6.6a9 9 0 1 1-12.8 0"/></svg>Shut down</button>
+          </div>
+        </section>
 
-  <h2>🔎 Scan for controllers</h2>
-  <div class="panel">
-    <div class="row">
-      <button id="scanBtn" onclick="post('/api/scan/start')">Scan</button>
-      <span class="muted" id="scanState"></span>
-    </div>
-    <div class="row" style="margin-top:12px">
-      <label for="rssiInput">dBm filter</label>
-      <input id="rssiInput" type="number" min="-100" max="-20" step="1">
-      <button id="rssiBtn" class="secondary" onclick="setRssi()">Apply</button>
-      <span class="muted">Higher is stricter, e.g. -45 close, -70 room.</span>
-    </div>
-    <div id="found" style="margin-top:8px"></div>
-  </div>
+        <section class="card panel">
+          <div class="panel-head"><div><div class="panel-title"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9h12a4 4 0 0 1 3.8 5.2l-1 3a2 2 0 0 1-3.3.8l-2-2H8.5l-2 2a2 2 0 0 1-3.3-.8l-1-3A4 4 0 0 1 6 9Z"/><path d="M8 11v4M6 13h4"/></svg><h2>Registered controllers</h2></div><div class="eyebrow">Controllers allowed to trigger the system</div></div><span id="pairedBadge" class="badge">0 paired</span></div>
+          <div id="paired"><div class="empty">Loading controllers…</div></div>
+          <div class="section-rule"></div>
+          <label class="field" for="manualMac">Add by Bluetooth address</label>
+          <div class="field-row"><input id="manualMac" aria-label="Controller Bluetooth address" placeholder="aa:bb:cc:dd:ee:ff" maxlength="17"><button onclick="manualAdd()">Add controller</button></div>
+          <div class="hint">Use the manual address if a controller does not appear in a nearby scan.</div>
+        </section>
 
-  <h2>🧾 Log</h2>
-  <div class="panel">
-    <pre id="log">...</pre>
-  </div>
+        <section class="card panel">
+          <div class="panel-head"><div><div class="panel-title"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg><h2>Discover controllers</h2></div><div class="eyebrow">Search for nearby Bluetooth gamepads</div></div><span id="scanState" class="badge">Idle</span></div>
+          <div class="scan-tools">
+            <button id="scanBtn" onclick="post('/api/scan/start', 'Controller scan started')">Start scan</button>
+            <div class="rssi-tools"><label for="rssiInput">Signal filter</label><input id="rssiInput" type="number" min="-100" max="-20" step="1" aria-label="RSSI threshold"><button id="rssiBtn" class="secondary compact" onclick="setRssi()">Apply</button></div>
+          </div>
+          <div class="hint" style="margin-bottom:12px">A higher dBm value is stricter: −45 finds close devices; −70 covers a typical room.</div>
+          <div id="found"><div class="empty">Start a scan to find nearby controllers.</div></div>
+        </section>
+
+        <section class="card log-panel">
+          <div class="log-toolbar"><div class="panel-title"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m8 9 3 3-3 3M13 15h3"/><rect x="3" y="4" width="18" height="16" rx="2"/></svg><h2>Event log</h2></div><div class="terminal-dots" aria-hidden="true"><i></i><i></i><i></i></div></div>
+          <pre id="log">Waiting for controller…</pre>
+        </section>
+      </div>
+
+      <aside class="stack">
+        <section class="card panel">
+          <div class="panel-head"><div><div class="panel-title"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12.5a10 10 0 0 1 14 0M8.5 16a5 5 0 0 1 7 0M12 20h.01"/></svg><h2>Wi-Fi &amp; device</h2></div><div class="eyebrow">Network and controller settings</div></div></div>
+          <div class="network-status"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12.5a10 10 0 0 1 14 0M8.5 16a5 5 0 0 1 7 0M12 20h.01"/></svg><div><div id="wifiState">Connecting…</div><div class="muted" id="wifiAddress"></div></div></div>
+          <label class="field" for="wifiSsid">2.4 GHz network name (SSID)</label>
+          <input id="wifiSsid" type="text" maxlength="32" autocomplete="off" placeholder="Setup AP only when empty">
+          <label class="field" for="wifiPassword">Network password</label>
+          <input id="wifiPassword" type="password" maxlength="63" autocomplete="new-password" placeholder="Leave blank to keep saved password">
+          <label class="row check-row" for="wifiOpen"><input id="wifiOpen" type="checkbox" onchange="openNetworkChanged()"><span>Open network (clear saved password)</span></label>
+          <button id="wifiSaveBtn" style="width:100%;margin-top:15px" onclick="saveWifi()">Save network settings</button>
+          <div class="message" id="wifiMessage">Saving settings starts one connection attempt.</div>
+          <div class="section-rule"></div>
+          <div class="restart-row"><div><div style="font-size:.8rem;font-weight:700">Restart ESP32</div><div class="hint">Available only while the PC is off.</div></div><button id="restartBtn" class="danger compact" onclick="restartDevice()">Restart</button></div>
+        </section>
+      </aside>
+    </div>
+  </main>
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
 
 <script>
+const byId = id => document.getElementById(id);
 async function api(path) {
   const response = await fetch(path, { cache: 'no-store' });
+  if (!response.ok) throw new Error(path + ' returned ' + response.status);
   return response.json();
 }
 let refreshInFlight = false;
 let refreshQueued = false;
-function scheduleRefresh(delayMs = 0) {
-    setTimeout(() => {
-        refresh();
-    }, delayMs);
+let wifiConfigLoaded = false;
+let restarting = false;
+let toastTimer;
+function notify(message) {
+  const toast = byId('toast');
+  toast.textContent = message;
+  toast.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => toast.classList.remove('show'), 2600);
 }
-async function post(path) {
-  await fetch(path, { method: 'POST', cache: 'no-store' });
-    scheduleRefresh();
+function scheduleRefresh(delayMs = 0) { setTimeout(refresh, delayMs); }
+async function post(path, message) {
+  try {
+    const response = await fetch(path, { method: 'POST', cache: 'no-store' });
+    if (!response.ok) throw new Error('Request failed');
+    if (message) notify(message);
+  } catch (error) { notify('Command could not be sent'); }
+  scheduleRefresh();
+}
+function powerOff() {
+  if (confirm('Send a normal shutdown command to the PC?')) post('/api/power/off', 'Shutdown command sent');
 }
 async function manualAdd() {
-  const mac = document.getElementById('manualMac').value.trim();
+  const mac = byId('manualMac').value.trim();
   const response = await fetch('/api/manual-add?mac=' + encodeURIComponent(mac), { method: 'POST', cache: 'no-store' });
-  if (response.ok) {
-    document.getElementById('manualMac').value = '';
-  }
-    scheduleRefresh();
+  if (response.ok) { byId('manualMac').value = ''; notify('Controller added'); }
+  else { notify(response.status === 409 ? 'Controller is already registered' : 'Enter a valid Bluetooth address'); }
+  scheduleRefresh();
 }
 async function setRssi() {
-  const value = document.getElementById('rssiInput').value;
-  await fetch('/api/rssi?value=' + encodeURIComponent(value), { method: 'POST', cache: 'no-store' });
-    scheduleRefresh();
+  const value = byId('rssiInput').value;
+  const response = await fetch('/api/rssi?value=' + encodeURIComponent(value), { method: 'POST', cache: 'no-store' });
+  notify(response.ok ? 'Signal filter updated' : 'Could not update signal filter');
+  scheduleRefresh();
+}
+function openNetworkChanged() {
+  const password = byId('wifiPassword');
+  const isOpen = byId('wifiOpen').checked;
+  password.disabled = isOpen;
+  if (isOpen) password.value = '';
+}
+async function saveWifi() {
+  const ssid = byId('wifiSsid').value;
+  const password = byId('wifiPassword').value;
+  const clearPassword = byId('wifiOpen').checked;
+  const message = byId('wifiMessage');
+  const path = '/api/wifi/save?ssid=' + encodeURIComponent(ssid) + '&password=' + encodeURIComponent(password) + '&clearPassword=' + (clearPassword ? '1' : '0');
+  message.textContent = 'Saving settings…';
+  const response = await fetch(path, { method: 'POST', cache: 'no-store' });
+  const result = await response.json();
+  if (!response.ok) {
+    message.textContent = result.error === 'invalid_password' ? 'Password must be empty/open or 8 to 63 characters.' : 'Could not save Wi-Fi settings.';
+    return;
+  }
+  byId('wifiPassword').value = '';
+  byId('wifiOpen').checked = false;
+  openNetworkChanged();
+  wifiConfigLoaded = false;
+  message.textContent = result.connecting ? 'Saved. Trying the new network…' : 'Saved. Setup AP will remain active.';
+  notify('Network settings saved');
+  scheduleRefresh();
+}
+async function restartDevice() {
+  if (!confirm('Restart the ESP32 controller now?')) return;
+  const response = await fetch('/api/restart', { method: 'POST', cache: 'no-store' });
+  if (!response.ok) { byId('wifiMessage').textContent = 'Restart is allowed only while the PC is off and idle.'; return; }
+  restarting = true;
+  byId('wifiMessage').textContent = 'Restarting… Reconnect if the Wi-Fi network changed.';
+  byId('restartBtn').disabled = true;
+  setTimeout(() => location.reload(), 6000);
 }
 function empty(text) {
   const div = document.createElement('div');
-  div.className = 'muted';
+  div.className = 'empty';
   div.textContent = text;
   return div;
 }
@@ -969,68 +1225,83 @@ function controllerRow(controller, actionText, actionClass, action) {
   const label = document.createElement('div');
   if (controller.name !== undefined) {
     const name = document.createElement('div');
-    name.textContent = controller.name || 'Unknown';
+    name.className = 'item-name';
+    name.textContent = controller.name || 'Unknown controller';
     label.appendChild(name);
   }
+  const meta = document.createElement('div');
+  meta.className = 'item-meta';
   const mac = document.createElement('code');
   mac.textContent = controller.mac;
-  label.appendChild(mac);
-  if (controller.rssi !== undefined) label.append(' (' + controller.rssi + ' dBm)');
+  meta.appendChild(mac);
+  if (controller.rssi !== undefined) meta.append('  ·  ' + controller.rssi + ' dBm');
+  label.appendChild(meta);
   const button = document.createElement('button');
-  button.className = actionClass || 'secondary';
+  button.className = (actionClass || 'secondary') + ' compact';
   button.textContent = actionText;
   button.onclick = action;
   row.append(label, button);
   return row;
 }
+function formatState(value) {
+  return (value || 'idle').replaceAll('_', ' ').replace(/\b\w/g, c => c.toUpperCase());
+}
 async function refresh() {
-    if (refreshInFlight) {
-        refreshQueued = true;
-        return;
+  if (refreshInFlight) { refreshQueued = true; return; }
+  refreshInFlight = true;
+  try {
+    if (restarting) return;
+    const [status, paired, found, logs, wifiConfig] = await Promise.all([api('/api/status'), api('/api/controllers'), api('/api/found'), api('/api/logs'), api('/api/wifi')]);
+    const pc = byId('pc');
+    pc.textContent = status.pcOn ? 'ON' : 'OFF';
+    pc.className = status.pcOn ? 'on' : 'off';
+    byId('powerState').textContent = formatState(status.powerState);
+    byId('powerBadge').textContent = status.busy ? 'Operation active' : (status.pcOn ? 'System online' : 'System offline');
+    byId('powerBadge').className = 'badge' + (status.pcOn ? ' active' : '');
+    byId('scanState').textContent = status.scanning ? 'Scanning…' : 'Idle';
+    byId('scanState').className = 'badge' + (status.scanning ? ' active' : '');
+    byId('activitySummary').textContent = status.scanning ? 'Scanning' : (status.busy ? 'Power task' : 'Idle');
+    byId('powerOnBtn').disabled = status.pcOn || status.busy;
+    byId('powerOffBtn').disabled = !status.pcOn || status.busy;
+    byId('scanBtn').disabled = status.scanning;
+    byId('rssiBtn').disabled = status.scanning;
+    byId('restartBtn').disabled = status.pcOn || status.busy;
+    byId('wifiState').textContent = formatState(status.wifi);
+    byId('wifiAddress').textContent = status.ip ? 'http://' + status.ip + '/' : 'No address assigned';
+    byId('networkSummary').textContent = status.lanIp ? 'LAN' : 'AP';
+    byId('networkIp').textContent = status.ip || 'No address';
+    byId('controllerCount').textContent = paired.length;
+    byId('pairedBadge').textContent = paired.length + (paired.length === 1 ? ' paired' : ' paired');
+    byId('lastUpdate').textContent = 'Updated ' + new Date().toLocaleTimeString([], {hour:'2-digit', minute:'2-digit', second:'2-digit'});
+    byId('liveText').textContent = 'Live';
+    byId('liveDot').className = 'dot online';
+    const rssiInput = byId('rssiInput');
+    if (document.activeElement !== rssiInput) rssiInput.value = status.rssiThreshold;
+    if (!wifiConfigLoaded) {
+      byId('wifiSsid').value = wifiConfig.ssid;
+      byId('wifiPassword').placeholder = wifiConfig.hasPassword ? 'Saved password (leave blank to keep)' : 'Leave blank for an open network';
+      wifiConfigLoaded = true;
     }
-
-    refreshInFlight = true;
-    try {
-        const [status, paired, found, logs] = await Promise.all([
-            api('/api/status'),
-            api('/api/controllers'),
-            api('/api/found'),
-            api('/api/logs')
-        ]);
-
-        document.getElementById('pc').textContent = status.pcOn ? 'ON' : 'OFF';
-        document.getElementById('powerState').textContent = status.powerState;
-        document.getElementById('scanState').textContent = status.scanning ? 'Scanning...' : 'Idle';
-        document.getElementById('powerOnBtn').disabled = status.pcOn || status.busy;
-        document.getElementById('powerOffBtn').disabled = !status.pcOn || status.busy;
-        document.getElementById('scanBtn').disabled = status.scanning;
-        document.getElementById('rssiBtn').disabled = status.scanning;
-        const rssiInput = document.getElementById('rssiInput');
-        if (document.activeElement !== rssiInput) rssiInput.value = status.rssiThreshold;
-
-        const pairedBox = document.getElementById('paired');
-        pairedBox.replaceChildren();
-        if (!paired.length) pairedBox.appendChild(empty('No controllers paired.'));
-        paired.forEach(c => pairedBox.appendChild(controllerRow(c, 'Remove', 'danger', () => post('/api/remove?slot=' + c.slot))));
-
-        const foundBox = document.getElementById('found');
-        foundBox.replaceChildren();
-        if (!found.length) foundBox.appendChild(empty(status.scanning ? 'No new controllers found yet.' : 'Start a scan to find nearby controllers.'));
-        found.forEach(c => foundBox.appendChild(controllerRow(c, 'Pair', '', () => post('/api/pair?mac=' + encodeURIComponent(c.mac)))));
-
-        const logBox = document.getElementById('log');
-        logBox.textContent = logs.length ? logs.join('\n') : 'No log entries yet.';
-        logBox.scrollTop = logBox.scrollHeight;
-    } catch (error) {
-        console.error('Refresh failed', error);
-        document.getElementById('scanState').textContent = 'Refresh failed';
-    } finally {
-        refreshInFlight = false;
-        if (refreshQueued) {
-            refreshQueued = false;
-            scheduleRefresh();
-        }
-    }
+    const pairedBox = byId('paired');
+    pairedBox.replaceChildren();
+    if (!paired.length) pairedBox.appendChild(empty('No controllers registered yet.'));
+    paired.forEach(c => pairedBox.appendChild(controllerRow(c, 'Remove', 'danger', () => post('/api/remove?slot=' + c.slot, 'Controller removed'))));
+    const foundBox = byId('found');
+    foundBox.replaceChildren();
+    if (!found.length) foundBox.appendChild(empty(status.scanning ? 'Listening for nearby controllers…' : 'Start a scan to find nearby controllers.'));
+    found.forEach(c => foundBox.appendChild(controllerRow(c, 'Pair', '', () => post('/api/pair?mac=' + encodeURIComponent(c.mac), 'Controller paired'))));
+    const logBox = byId('log');
+    logBox.textContent = logs.length ? logs.join('\n') : 'No log entries yet.';
+    logBox.scrollTop = logBox.scrollHeight;
+  } catch (error) {
+    console.error('Refresh failed', error);
+    byId('liveText').textContent = 'Disconnected';
+    byId('liveDot').className = 'dot offline';
+    byId('lastUpdate').textContent = 'Refresh failed';
+  } finally {
+    refreshInFlight = false;
+    if (refreshQueued) { refreshQueued = false; scheduleRefresh(); }
+  }
 }
 setInterval(() => scheduleRefresh(), 1500);
 scheduleRefresh();
@@ -1139,6 +1410,54 @@ void handleApiManualAdd(WiFiClient& client, const String& query) {
     sendJson(client, 200, "{\"ok\":true}");
 }
 
+void handleApiWiFiSave(WiFiClient& client, const String& query) {
+    if (query.indexOf("ssid=") < 0) {
+        sendJson(client, 400, "{\"ok\":false,\"error\":\"missing_ssid\"}");
+        return;
+    }
+
+    String ssid = queryParam(query, "ssid");
+    String password = queryParam(query, "password");
+    bool clearPassword = queryParam(query, "clearPassword") == "1";
+    bool replacePassword = clearPassword || password.length() > 0;
+    if (clearPassword) password = "";
+
+    if (ssid.length() > 32) {
+        sendJson(client, 400, "{\"ok\":false,\"error\":\"invalid_ssid\"}");
+        return;
+    }
+    if (replacePassword && (password.length() > 63 || (password.length() > 0 && password.length() < 8))) {
+        sendJson(client, 400, "{\"ok\":false,\"error\":\"invalid_password\"}");
+        return;
+    }
+
+    if (!saveWiFiSettings(ssid, password, replacePassword)) {
+        sendJson(client, 400, "{\"ok\":false,\"error\":\"invalid_settings\"}");
+        return;
+    }
+
+    addLog(String("WIFI - Settings saved for SSID: ") + (wifiSsid.length() > 0 ? wifiSsid : "(router WiFi disabled)"));
+    // Defer the radio-mode change until after this HTTP response has left the
+    // setup AP. The loop will make exactly one attempt with the new settings.
+    wifiConnectRequested = true;
+    sendJson(client, 200, wifiSsid.length() > 0
+        ? "{\"ok\":true,\"connecting\":true}"
+        : "{\"ok\":true,\"connecting\":false}");
+}
+
+void handleApiRestart(WiFiClient& client) {
+    if (stablePcOn || powerState != POWER_IDLE) {
+        addLog("SYSTEM - Restart rejected while PC is on or power operation is active.");
+        sendJson(client, 409, "{\"ok\":false,\"error\":\"restart_not_safe\"}");
+        return;
+    }
+
+    addLog("SYSTEM - Restart requested from web portal.");
+    sendJson(client, 200, "{\"ok\":true}");
+    restartRequested = true;
+    restartRequestedAt = millis();
+}
+
 void setupWebServer() {
     server.begin();
 }
@@ -1151,14 +1470,14 @@ void setupWiFi() {
 
     setupWebServer();
 
-    if (WIFI_SSID[0] == '\0') {
-        addLog("Router WiFi disabled: WIFI_SSID is empty.");
+    if (wifiSsid.length() == 0) {
+        addLog("Router WiFi disabled: saved SSID is empty.");
         startSetupAp();
         return;
     }
 
-    addLog(String("Trying router WiFi first, SSID: ") + WIFI_SSID);
-    WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+    addLog(String("Trying router WiFi first, SSID: ") + wifiSsid);
+    WiFi.begin(wifiSsid.c_str(), wifiPassword.c_str());
 
     Serial.print("Connecting WiFi");
     unsigned long wifiStartTime = millis();
@@ -1220,6 +1539,8 @@ void handleWebServer() {
         sendJson(client, 200, foundControllersJson());
     } else if (method == "GET" && target == "/api/logs") {
         sendJson(client, 200, logsJson());
+    } else if (method == "GET" && target == "/api/wifi") {
+        sendJson(client, 200, wifiConfigJson());
     } else if (method == "POST" && target == "/api/remove") {
         handleApiRemove(client, query);
     } else if (method == "POST" && target == "/api/scan/start") {
@@ -1230,6 +1551,10 @@ void handleWebServer() {
         handleApiPair(client, query);
     } else if (method == "POST" && target == "/api/manual-add") {
         handleApiManualAdd(client, query);
+    } else if (method == "POST" && target == "/api/wifi/save") {
+        handleApiWiFiSave(client, query);
+    } else if (method == "POST" && target == "/api/restart") {
+        handleApiRestart(client);
     } else if (method == "POST" && target == "/api/power/on") {
         startAtxPowerOnSequence();
         sendJson(client, 200, "{\"ok\":true}");
@@ -1245,7 +1570,31 @@ void handleWebServer() {
 }
 
 void monitorWiFi(unsigned long now) {
-    if (WIFI_SSID[0] == '\0') return;
+    if (wifiConnectRequested) {
+        wifiConnectRequested = false;
+        routerWifiWasConnected = false;
+
+        if (wifiSsid.length() == 0) {
+            routerWifiRetrying = false;
+            WiFi.disconnect(false);
+            startSetupAp();
+            addLog("Router WiFi disabled. Setup AP will remain active.");
+            return;
+        }
+
+        addLog(String("Trying saved router WiFi once, SSID: ") + wifiSsid);
+        // Keep the setup AP alive while testing new credentials so the portal
+        // remains reachable if the router connection fails.
+        WiFi.mode(setupApRunning ? WIFI_AP_STA : WIFI_STA);
+        WiFi.disconnect(false);
+        WiFi.setHostname(WEB_HOSTNAME);
+        WiFi.begin(wifiSsid.c_str(), wifiPassword.c_str());
+        routerWifiRetrying = true;
+        wifiRetryStartedAt = now;
+        return;
+    }
+
+    if (wifiSsid.length() == 0) return;
 
     bool connected = WiFi.status() == WL_CONNECTED;
     if (connected) {
@@ -1254,32 +1603,24 @@ void monitorWiFi(unsigned long now) {
             routerWifiRetrying = false;
             addLog(String("Router WiFi reconnected. LAN webpage: http://") + WiFi.localIP().toString());
             addLog(String("Signal: ") + String(WiFi.RSSI()) + " dBm");
+            stopSetupAp();
         }
         return;
     }
 
     if (routerWifiRetrying && now - wifiRetryStartedAt >= WIFI_CONNECT_TIMEOUT_MS) {
         routerWifiRetrying = false;
-        addLog(String("Router WiFi retry failed: ") + wifiStatusName(WiFi.status()));
+        addLog(String("Router WiFi attempt failed: ") + wifiStatusName(WiFi.status()));
         startSetupAp();
+        addLog("Setup AP will remain active until WiFi settings are saved again.");
+        return;
     }
 
     if (routerWifiWasConnected) {
         routerWifiWasConnected = false;
         addLog(String("Router WiFi dropped: ") + wifiStatusName(WiFi.status()));
         startSetupAp();
-    }
-
-    if (now - lastWifiReconnectAttempt >= WIFI_RECONNECT_INTERVAL_MS) {
-        lastWifiReconnectAttempt = now;
-        addLog("Retrying router WiFi...");
-        stopSetupAp();
-        WiFi.mode(WIFI_STA);
-        WiFi.disconnect(false);
-        WiFi.setHostname(WEB_HOSTNAME);
-        WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
-        routerWifiRetrying = true;
-        wifiRetryStartedAt = now;
+        addLog("Setup AP will remain active until WiFi settings are saved again.");
     }
 }
 
@@ -1327,6 +1668,7 @@ void setup() {
     if (count == 0) addLog("Controllers - No saved controllers");
     preferences.end();
 
+    loadWiFiSettings();
     setupWiFi();
 
     BLEDevice::init("");
@@ -1343,19 +1685,6 @@ void setup() {
 void loop() {
     unsigned long now = millis();
 
-    /*
-    static String lastStatusLog = "";
-    String statusLog = "DEBUG BUTTON=" + String(digitalRead(BUTTON_PIN)) +
-    " RELAY_PWR=" + String(digitalRead(RELAY_PWR_PIN)) +
-    " RELAY_PSU=" + String(digitalRead(RELAY_PSU_PIN));
-    
-    // DEBUG: periodically print button / PC / relay states for troubleshooting
-    if (statusLog != lastStatusLog) {
-        addLog(statusLog);
-        lastStatusLog = statusLog;
-    }
-    */
-
     // Update stable inputs and advance any in-progress relay sequence before
     // reacting to BLE or button events.
     updatePcState();
@@ -1365,7 +1694,17 @@ void loop() {
     handleButton(now);
     updateStatusLed(now);
     monitorWiFi(now);
+    protectSetupApClient();
     handleWebServer();
+
+    // Give the HTTP response time to leave before restarting. Restart is only
+    // accepted while the PC is off so PS_ON cannot be interrupted here.
+    if (restartRequested) {
+        if (millis() - restartRequestedAt >= 500) ESP.restart();
+        delay(10);
+        return;
+    }
+
     scanClassicBluetooth();
     scanBle();
 }
