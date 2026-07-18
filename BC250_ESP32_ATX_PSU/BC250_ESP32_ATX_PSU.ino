@@ -4,6 +4,7 @@
 #include <BLEAdvertisedDevice.h>
 #include <Preferences.h>
 #include <WiFi.h>
+#include <ESPmDNS.h>
 #include <string.h>
 #include "esp_gap_bt_api.h"
 #include "esp_mac.h"
@@ -92,6 +93,7 @@ bool classicPageScanTargetInitialized = false;
 bool classicPageScanTargetEnabled = false;
 
 bool setupApRunning = false;
+bool mdnsRunning = false;
 bool routerWifiWasConnected = false;
 bool routerWifiRetrying = false;
 unsigned long wifiRetryStartedAt = 0;
@@ -914,6 +916,19 @@ String wifiConfigJson() {
     return json;
 }
 
+void setupMdns() {
+    if (mdnsRunning) return;
+
+    if (!MDNS.begin(WEB_HOSTNAME)) {
+        addLog("mDNS - WARNING: responder failed to start.");
+        return;
+    }
+
+    MDNS.addService("http", "tcp", 80);
+    mdnsRunning = true;
+    addLog(String("mDNS - Webpage: http://") + WEB_HOSTNAME + ".local/");
+}
+
 void startSetupAp() {
     if (setupApRunning) return;
 
@@ -933,6 +948,7 @@ void startSetupAp() {
 
     if (apStarted) {
         setupApRunning = true;
+        setupMdns();
         addLog(String("AP - Setup started: ") + WEB_HOSTNAME);
         addLog(String("AP - Webpage: http://") + WiFi.softAPIP().toString());
     } else {
@@ -1641,6 +1657,7 @@ void setupWiFi() {
     }
 
     routerWifiWasConnected = true;
+    setupMdns();
     addLog(String("Router WiFi connected. LAN webpage: http://") + WiFi.localIP().toString());
     addLog(String("Signal: ") + String(WiFi.RSSI()) + " dBm");
 }
@@ -1748,6 +1765,7 @@ void monitorWiFi(unsigned long now) {
         if (!routerWifiWasConnected) {
             routerWifiWasConnected = true;
             routerWifiRetrying = false;
+            setupMdns();
             addLog(String("Router WiFi reconnected. LAN webpage: http://") + WiFi.localIP().toString());
             addLog(String("Signal: ") + String(WiFi.RSSI()) + " dBm");
             stopSetupAp();

@@ -200,9 +200,9 @@ When the BC250 is off, the ESP32 temporarily uses the saved adapter address for 
 
 <img src="img/webUI_mobile_AP.png" alt="BC250 ESP ATX PSU WebUI" width="300"/>
 
-When connected to router Wi-Fi, open the IP address shown in Serial Monitor. Depending on your router and client, `http://bc250-controller.local/` may also work, but the sketch does not explicitly start an mDNS responder, so the numeric IP is the reliable option.
+When connected to router Wi-Fi, open `http://bc250-controller.local/` or use the assigned local IP address instead.
 
-If router Wi-Fi is unavailable, join the fallback AP and browse to the AP address printed in the log, normally `http://192.168.4.1/`.
+If router Wi-Fi is unavailable, join the fallback AP and open `http://bc250-controller.local/` or `http://192.168.4.1/`.
 
 The portal provides:
 
@@ -279,40 +279,21 @@ There is no authentication, TLS, CSRF protection, or network access control in t
 
 ## Troubleshooting
 
-### The sketch does not compile
-
-- Confirm an original ESP32 target is selected, not an AVR board or ESP32-C3.
-- Use the BLE headers supplied with the Espressif ESP32 Arduino core; installing a second, conflicting BLE library can cause ambiguous or missing APIs.
-- If `esp_gap_bt_api.h` or Classic Bluetooth symbols are unavailable, the selected ESP32 variant/core does not provide the required Classic Bluetooth stack.
-
 ### The web page is unavailable
 
-- Open Serial Monitor at `115200` baud and use the printed numeric IP address.
 - Confirm the configured network is 2.4 GHz and the SSID/password are correct.
 - After the 20-second connection timeout, join the fallback AP and browse to `192.168.4.1`.
 - Ensure the client is on the same LAN and that client/AP isolation is disabled.
-- Do not rely on the `.local` hostname; this sketch does not initialize mDNS.
+- If `http://bc250-controller.local/` does not resolve, use the assigned local IP address.
 
 ### A controller is not found
 
-- Put it into Bluetooth pairing mode and move it close to the ESP32.
 - Lower the RSSI threshold to a more negative value, such as `-70` or `-85 dBm`.
 - Wait for the full 15-second scan because BLE and Classic inquiries share the radio.
 - Read the controller MAC address elsewhere and add it manually.
-- Check whether the device uses a rotating private address.
 
 ### A saved controller does not wake the PC
 
 - Wait at least 60 seconds after shutdown.
 - Confirm the saved MAC matches the address the controller currently advertises.
-- Check the live log for “Known controller detected”.
-- Verify that the PC monitor input is low while the PC is off; wake scanning is suppressed when it reads high.
-- Confirm the PSU relay grounds `PS_ON`, then verify the motherboard relay closes after the 1-second delay.
-
-## Limitations
-
-- Controller compatibility depends on discoverable Bluetooth behavior and stable device addresses.
-- The web UI and API are intended only for a trusted local network.
-- The portal can save router credentials, but it is not a captive portal and cannot scan for nearby Wi-Fi networks.
-- Changing the fallback AP name/password or hostname still requires editing and reflashing the firmware.
-- Saved controllers are managed through the web page; there is no physical factory-reset control in this version.
+- Add the BC250 Bluetooth adapter MAC address on the ESP32 WebUI to spoof its Bluetooth while BC250 is off.
