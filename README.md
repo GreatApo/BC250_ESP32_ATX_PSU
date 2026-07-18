@@ -9,17 +9,17 @@ An ESP32-based power controller (with 2 relays) for a BC-250 motherboard running
 
 ## Features
 
-- Controls an ATX PSU on/off by grounding its green `PS_ON` wire through a relay.
-- Pulses the BC-250 motherboard power-button input through a second relay.
 - Provides physical-button power-on and normal-shutdown controls.
-- Wakes the BC-250 when a registered controller is detected over BLE or Bluetooth Classic.
-- Stores up to five controller MAC addresses in ESP32 non-volatile storage.
-- Provides web-based power controls, live state, controller management, RSSI filtering, and a rolling event log.
-- Saves router Wi-Fi settings from the web portal and applies them after a guarded controller restart.
-- Discovers nearby controllers from a built-in web interface.
-- Supports manual MAC-address registration when a controller is not discoverable.
+- Controls an ATX PSU and BC-250 motherboard on/off.
+- Power on the BC-250 when a registered gamepads is detected over BLE or Bluetooth Classic.
+- Provides web-UI power controls, live state, gamepads management, RSSI filtering, and a rolling event log.
 - Connects to a configured 2.4 GHz Wi-Fi network and falls back to its own setup access point if the connection fails.
+- Saves router Wi-Fi settings from the web portal and applies them after a guarded controller restart.
+- Discovers nearby gamepads from the built-in web-UI.
+- Supports manual MAC-address registration when a gamepad is not discoverable.
+- Supports web-UI Android & iOS shortcut icons.
 - Keeps the fallback AP active after a failed or dropped router connection; another router attempt is made only when settings are saved again or the ESP32 boots.
+- Supports Bluetooth MAC address spoofing for Bluetooth Classic gamepads that are already paired with the BC250.
 
 ## How it works
 
