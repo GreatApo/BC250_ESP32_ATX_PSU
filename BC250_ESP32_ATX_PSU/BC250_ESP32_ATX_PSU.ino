@@ -1179,7 +1179,7 @@ void handleWebRoot(WiFiClient& client) {
     <div class="layout">
       <div class="stack">
         <section class="card panel">
-          <div class="panel-head"><div><div class="panel-title"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v10M18.4 6.6a9 9 0 1 1-12.8 0"/></svg><h2>Power control</h2></div><div class="eyebrow">Operate the ATX PSU and motherboard power switch</div></div><span id="powerBadge" class="badge">Checking</span></div>
+          <div class="panel-head"><div><div class="panel-title"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v10M18.4 6.6a9 9 0 1 1-12.8 0"/></svg><h2>BC250 Power control</h2></div><div class="eyebrow">Operate the ATX PSU and BC250's power switch</div></div><span id="powerBadge" class="badge">Checking</span></div>
           <div class="power-controls">
             <button id="powerOnBtn" class="control-button" onclick="post('/api/power/on', 'Power-on command sent')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v10M18.4 6.6a9 9 0 1 1-12.8 0"/></svg>Power on</button>
             <button id="powerOffBtn" class="control-button danger" onclick="powerOff()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v10M18.4 6.6a9 9 0 1 1-12.8 0"/></svg>Shut down</button>
@@ -1187,7 +1187,7 @@ void handleWebRoot(WiFiClient& client) {
         </section>
 
         <section class="card panel">
-          <div class="panel-head"><div><div class="panel-title"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9h12a4 4 0 0 1 3.8 5.2l-1 3a2 2 0 0 1-3.3.8l-2-2H8.5l-2 2a2 2 0 0 1-3.3-.8l-1-3A4 4 0 0 1 6 9Z"/><path d="M8 11v4M6 13h4"/></svg><h2>Registered controllers</h2></div><div class="eyebrow">Controllers allowed to trigger the system</div></div><span id="pairedBadge" class="badge">0 paired</span></div>
+          <div class="panel-head"><div><div class="panel-title"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9h12a4 4 0 0 1 3.8 5.2l-1 3a2 2 0 0 1-3.3.8l-2-2H8.5l-2 2a2 2 0 0 1-3.3-.8l-1-3A4 4 0 0 1 6 9Z"/><path d="M8 11v4M6 13h4"/></svg><h2>Registered controllers</h2></div><div class="eyebrow">Controllers allowed to trigger the system</div></div><span id="pairedBadge" class="badge">0 devices</span></div>
           <div id="paired"><div class="empty">Loading controllers…</div></div>
           <div class="section-rule"></div>
           <label class="field" for="manualMac">Add by Bluetooth address</label>
@@ -1196,12 +1196,11 @@ void handleWebRoot(WiFiClient& client) {
         </section>
 
         <section class="card panel">
-          <div class="panel-head"><div><div class="panel-title"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg><h2>Discover controllers</h2></div><div class="eyebrow">Search for nearby Bluetooth gamepads</div></div><span id="scanState" class="badge">Idle</span></div>
+          <div class="panel-head"><div><div class="panel-title"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg><h2>Discover controllers</h2></div><div class="eyebrow">Search for nearby BLE or Classic Bluetooth gamepads</div></div><span id="scanState" class="badge">Idle</span></div>
           <div class="scan-tools">
             <button id="scanBtn" onclick="post('/api/scan/start', 'Controller scan started')">Start scan</button>
-            <div class="rssi-tools"><label for="rssiInput">Signal filter</label><input id="rssiInput" type="number" min="-100" max="-20" step="1" aria-label="RSSI threshold"><button id="rssiBtn" class="secondary compact" onclick="setRssi()">Apply</button></div>
+            <div class="rssi-tools field-with-info"><label class="field-with-info" for="rssiInput"><span>Signal strength filter</span><span class="info-tip" tabindex="0" aria-label="About the signal strength filter"><span aria-hidden="true">i</span><span class="tooltip" role="tooltip">A higher dBm value is stricter:<br/>-45 finds close devices,<br/>-70 covers a typical room.<br/><br/>Values should be negative.</span></span></label><input id="rssiInput" type="number" min="-100" max="-20" step="1" aria-label="RSSI threshold"><button id="rssiBtn" class="secondary compact" onclick="setRssi()">Apply</button></div>
           </div>
-          <div class="hint" style="margin-bottom:12px">A higher dBm value is stricter: −45 finds close devices; −70 covers a typical room.</div>
           <div id="found"><div class="empty">Start a scan to find nearby controllers.</div></div>
         </section>
 
@@ -1213,9 +1212,10 @@ void handleWebRoot(WiFiClient& client) {
 
       <aside class="stack">
         <section class="card panel">
-          <div class="panel-head"><div><div class="panel-title"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12.5a10 10 0 0 1 14 0M8.5 16a5 5 0 0 1 7 0M12 20h.01"/></svg><h2>Wi-Fi &amp; device</h2></div><div class="eyebrow">Network and controller settings</div></div></div>
+          <div class="panel-head"><div><div class="panel-title"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12.5a10 10 0 0 1 14 0M8.5 16a5 5 0 0 1 7 0M12 20h.01"/></svg><h2>ESP32 Settings</h2></div><div class="eyebrow">Network and controller settings</div></div></div>
           <div class="network-status"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12.5a10 10 0 0 1 14 0M8.5 16a5 5 0 0 1 7 0M12 20h.01"/></svg><div><div id="wifiState">Connecting…</div><div class="muted" id="wifiAddress"></div></div></div>
-          <label class="field" for="wifiSsid">2.4 GHz network name (SSID)</label>
+          <div class="section-rule"></div>
+		  <label class="field field-with-info" for="wifiSsid"><span>2.4 GHz network name (SSID)</span><span class="info-tip" tabindex="0" aria-label="About wifi"><span aria-hidden="true">i</span><span class="tooltip" role="tooltip">Set the WiFi details to connect on the local network instead of setting up an Access Point (AP).<br>Leave SSID empty for AP.</span></span></label>
           <input id="wifiSsid" type="text" maxlength="32" autocomplete="off" placeholder="Setup AP only when empty">
           <label class="field" for="wifiPassword">Network password</label>
           <input id="wifiPassword" type="password" maxlength="63" autocomplete="new-password" placeholder="Leave blank to keep saved password">
@@ -1275,7 +1275,7 @@ async function manualAdd() {
 async function setRssi() {
   const value = byId('rssiInput').value;
   const response = await fetch('/api/rssi?value=' + encodeURIComponent(value), { method: 'POST', cache: 'no-store' });
-  notify(response.ok ? 'Signal filter updated' : 'Could not update signal filter');
+  notify(response.ok ? 'Signal strength filter updated' : 'Could not update signal strength filter');
   scheduleRefresh();
 }
 function openNetworkChanged() {
@@ -1387,7 +1387,7 @@ async function refresh() {
     byId('networkSummary').textContent = status.lanIp ? 'LAN' : 'AP';
     byId('networkIp').textContent = status.ip || 'No address';
     byId('controllerCount').textContent = paired.length;
-    byId('pairedBadge').textContent = paired.length + (paired.length === 1 ? ' paired' : ' paired');
+    byId('pairedBadge').textContent = paired.length + (paired.length === 1 ? ' device' : ' devices');
     byId('lastUpdate').textContent = 'Updated ' + new Date().toLocaleTimeString([], {hour:'2-digit', minute:'2-digit', second:'2-digit'});
     byId('liveText').textContent = 'Live';
     byId('liveDot').className = 'dot online';
