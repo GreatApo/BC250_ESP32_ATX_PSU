@@ -6,6 +6,7 @@
 #include <WiFi.h>
 #include <string.h>
 #include "esp_gap_bt_api.h"
+#include "esp_mac.h"
 
 // ================= PIN SETTINGS =================
 const int RELAY_PWR_PIN = 17;     // (Left relay) BC-250 power button pin + TPMS1 pin 17 (GND)
@@ -27,6 +28,7 @@ const char* WIFI_CONFIG_NAMESPACE = "wifi_cfg";
 
 String wifiSsid = DEFAULT_WIFI_SSID;
 String wifiPassword = DEFAULT_WIFI_PASSWORD;
+String classicBtSpoofMac = "";
 
 WiFiServer server(80);
 
@@ -85,6 +87,9 @@ unsigned long lastBleScanTime = 0;
 unsigned long lastClassicScanTime = 0;
 bool classicDiscoveryRunning = false;
 bool classicDiscoveryCancelRequested = false;
+bool classicBtSpoofEnabled = false;
+bool classicPageScanTargetInitialized = false;
+bool classicPageScanTargetEnabled = false;
 
 bool setupApRunning = false;
 bool routerWifiWasConnected = false;
@@ -405,6 +410,49 @@ bool isValidMac(const String& mac) {
     return true;
 }
 
+bool parseMacAddress(const String& mac, uint8_t address[6]) {
+    unsigned int octets[6];
+    if (sscanf(mac.c_str(), "%02x:%02x:%02x:%02x:%02x:%02x",
+               &octets[0], &octets[1], &octets[2],
+               &octets[3], &octets[4], &octets[5]) != 6) {
+        return false;
+    }
+
+    bool anyNonZero = false;
+    for (int i = 0; i < 6; i++) {
+        if (octets[i] > 0xff) return false;
+        address[i] = (uint8_t)octets[i];
+        if (address[i] != 0) anyNonZero = true;
+    }
+
+    // A Bluetooth device address must identify one device, not a multicast or
+    // broadcast group. esp_iface_mac_addr_set() also validates this, but the
+    // explicit check gives a useful startup message.
+    return anyNonZero && (address[0] & 0x01) == 0;
+}
+
+void applyClassicBluetoothSpoof() {
+    String configuredMac = normalizeMac(classicBtSpoofMac);
+    if (configuredMac.length() == 0) {
+        addLog("Classic Bluetooth - Using factory MAC address.");
+        return;
+    }
+
+    uint8_t address[6];
+    if (!isValidMac(configuredMac) || !parseMacAddress(configuredMac, address)) {
+        addLog(String("Classic Bluetooth - WARNING: invalid spoof MAC: ") + configuredMac);
+        return;
+    }
+
+    esp_err_t result = esp_iface_mac_addr_set(address, ESP_MAC_BT);
+    if (result == ESP_OK) {
+        classicBtSpoofEnabled = true;
+        addLog(String("Classic Bluetooth - Spoof MAC set to ") + configuredMac);
+    } else {
+        addLog(String("Classic Bluetooth - WARNING: spoof MAC failed: ") + String((int)result));
+    }
+}
+
 String jsonEscape(const String& value) {
     String escaped = "";
     for (unsigned int i = 0; i < value.length(); i++) {
@@ -527,16 +575,48 @@ void classicGapCallback(esp_bt_gap_cb_event_t event, esp_bt_gap_cb_param_t* para
             classicDiscoveryCancelRequested = false;
             //addLog("Classic Bluetooth inquiry finished.");
         }
+    } else if (event == ESP_BT_GAP_ACL_CONN_CMPL_STAT_EVT &&
+               classicBtSpoofEnabled &&
+               param->acl_conn_cmpl_stat.stat == ESP_BT_STATUS_SUCCESS) {
+        // A gamepad paired to the PC pages the PC adapter's address instead of
+        // entering inquiry/discoverable mode. With that address spoofed, the
+        // incoming ACL attempt exposes the gamepad address here even though
+        // authentication will normally fail without the PC's link key.
+        String deviceMAC = classicAddressToString(param->acl_conn_cmpl_stat.bda);
+        handleClassicDevice(deviceMAC, "Paired Classic device", -127);
+    }
+}
+
+void updateClassicPageScan() {
+    if (!classicBtSpoofEnabled) return;
+
+    // Do not answer under the PC adapter's address once the real PC adapter is
+    // powered. Re-enable page scan only while the PC is off and the ESP32 is
+    // responsible for noticing controllers looking for their paired host.
+    bool shouldEnable = !stablePcOn;
+    if (classicPageScanTargetInitialized && shouldEnable == classicPageScanTargetEnabled) return;
+
+    classicPageScanTargetInitialized = true;
+    classicPageScanTargetEnabled = shouldEnable;
+
+    esp_err_t result = esp_bt_gap_set_scan_mode(
+        shouldEnable ? ESP_BT_CONNECTABLE : ESP_BT_NON_CONNECTABLE,
+        ESP_BT_NON_DISCOVERABLE
+    );
+    if (result != ESP_OK) {
+        addLog(String("Classic Bluetooth - WARNING: page scan update failed: ") + String((int)result));
     }
 }
 
 void setupClassicBluetooth() {
     esp_err_t result = esp_bt_gap_register_callback(classicGapCallback);
-    if (result == ESP_OK) {
-        addLog("Classic Bluetooth - Inquiry ready.");
-    } else {
+    if (result != ESP_OK) {
         addLog(String("Classic Bluetooth - WARNING: callback failed: ") + String((int)result));
+        return;
     }
+
+    updateClassicPageScan();
+    addLog("Classic Bluetooth - Inquiry ready.");
 }
 
 bool setupApHasClient() {
@@ -828,6 +908,8 @@ String wifiConfigJson() {
     json += wifiPassword.length() > 0 ? "true" : "false";
     json += ",\"hostname\":\"";
     json += jsonEscape(WEB_HOSTNAME);
+    json += "\",\"classicBtSpoofMac\":\"";
+    json += jsonEscape(classicBtSpoofMac);
     json += "\"}";
     return json;
 }
@@ -1010,6 +1092,21 @@ void handleWebRoot(WiFiClient& client) {
     .row { display: flex; gap: 9px; align-items: center; flex-wrap: wrap; }
     .field-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 9px; }
     label.field { display: block; margin: 13px 0 6px; color: #a6b4c5; font-size: .76rem; font-weight: 650; }
+    label.field-with-info { display: flex; align-items: center; gap: 7px; }
+    .info-tip {
+      position: relative; display: inline-grid; place-items: center; width: 17px; height: 17px;
+      border: 1px solid #52677f; border-radius: 50%; color: #b9c8d8; font-size: .68rem;
+      font-weight: 800; line-height: 1; cursor: help; outline: none;
+    }
+    .info-tip:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+    .tooltip {
+      position: absolute; z-index: 20; right: -8px; bottom: calc(100% + 9px); width: min(290px, calc(100vw - 48px));
+      padding: 10px 11px; border: 1px solid #39506b; border-radius: 9px; background: #172435;
+      color: #dbe6f2; box-shadow: 0 12px 32px rgba(0,0,0,.38); font-size: .7rem;
+      font-weight: 500; line-height: 1.45; opacity: 0; visibility: hidden; pointer-events: none;
+      transform: translateY(4px); transition: opacity .15s ease, transform .15s ease, visibility .15s;
+    }
+    .info-tip:hover .tooltip, .info-tip:focus .tooltip { opacity: 1; visibility: visible; transform: translateY(0); }
     input {
       width: 100%; min-height: 42px; border: 1px solid #334358; border-radius: 10px;
       padding: 9px 12px; background: #0b121b; color: #edf3f9;
@@ -1126,6 +1223,10 @@ void handleWebRoot(WiFiClient& client) {
           <button id="wifiSaveBtn" style="width:100%;margin-top:15px" onclick="saveWifi()">Save network settings</button>
           <div class="message" id="wifiMessage">Saving settings starts one connection attempt.</div>
           <div class="section-rule"></div>
+          <label class="field field-with-info" for="btSpoofMac"><span>Bluetooth spoof address</span><span class="info-tip" tabindex="0" aria-label="About the Bluetooth spoof address"><span aria-hidden="true">i</span><span class="tooltip" role="tooltip">Set the MAC address of the BC250 Bluetooth adapter that the gamepads are already paired with. While the PC is off, the ESP32 uses it to notice a paired gamepad trying to reconnect.<br/><br/>Leave this empty to disable spoofing.<br/>This is not required for BLE gamepads.<br/><br/>You can get the adapter MAC address with the <i>`bluetoothctl list`</i> command.<br/><br/>A restart is required after changing it.</span></span></label>
+          <div class="field-row"><input id="btSpoofMac" type="text" maxlength="17" autocomplete="off" placeholder="Disabled when empty" aria-label="Bluetooth spoof address"><button id="btSpoofSaveBtn" class="secondary" onclick="saveBtSpoofMac()">Save</button></div>
+          <div class="message" id="btSpoofMessage">Changes take effect after restarting the ESP32.</div>
+          <div class="section-rule"></div>
           <div class="restart-row"><div><div style="font-size:.8rem;font-weight:700">Restart ESP32</div><div class="hint">Available only while the PC is off.</div></div><button id="restartBtn" class="danger compact" onclick="restartDevice()">Restart</button></div>
         </section>
       </aside>
@@ -1142,7 +1243,7 @@ async function api(path) {
 }
 let refreshInFlight = false;
 let refreshQueued = false;
-let wifiConfigLoaded = false;
+let deviceConfigLoaded = false;
 let restarting = false;
 let toastTimer;
 function notify(message) {
@@ -1199,10 +1300,25 @@ async function saveWifi() {
   byId('wifiPassword').value = '';
   byId('wifiOpen').checked = false;
   openNetworkChanged();
-  wifiConfigLoaded = false;
+  deviceConfigLoaded = false;
   message.textContent = result.connecting ? 'Saved. Trying the new network…' : 'Saved. Setup AP will remain active.';
   notify('Network settings saved');
   scheduleRefresh();
+}
+async function saveBtSpoofMac() {
+  const input = byId('btSpoofMac');
+  const message = byId('btSpoofMessage');
+  const mac = input.value.trim();
+  message.textContent = 'Saving setting…';
+  const response = await fetch('/api/bluetooth/save?mac=' + encodeURIComponent(mac), { method: 'POST', cache: 'no-store' });
+  const result = await response.json();
+  if (!response.ok) {
+    message.textContent = 'Enter a valid unicast MAC address, or leave the field empty to disable spoofing.';
+    return;
+  }
+  input.value = result.mac;
+  message.textContent = result.mac ? 'Saved. Restart the ESP32 while the PC is off to apply it.' : 'Spoofing disabled. Restart the ESP32 to apply it.';
+  notify(result.mac ? 'Bluetooth spoof address saved' : 'Bluetooth spoofing disabled');
 }
 async function restartDevice() {
   if (!confirm('Restart the ESP32 controller now?')) return;
@@ -1277,10 +1393,11 @@ async function refresh() {
     byId('liveDot').className = 'dot online';
     const rssiInput = byId('rssiInput');
     if (document.activeElement !== rssiInput) rssiInput.value = status.rssiThreshold;
-    if (!wifiConfigLoaded) {
+    if (!deviceConfigLoaded) {
       byId('wifiSsid').value = wifiConfig.ssid;
       byId('wifiPassword').placeholder = wifiConfig.hasPassword ? 'Saved password (leave blank to keep)' : 'Leave blank for an open network';
-      wifiConfigLoaded = true;
+      byId('btSpoofMac').value = wifiConfig.classicBtSpoofMac || '';
+      deviceConfigLoaded = true;
     }
     const pairedBox = byId('paired');
     pairedBox.replaceChildren();
@@ -1445,6 +1562,34 @@ void handleApiWiFiSave(WiFiClient& client, const String& query) {
         : "{\"ok\":true,\"connecting\":false}");
 }
 
+void handleApiBluetoothSave(WiFiClient& client, const String& query) {
+    String mac = normalizeMac(queryParam(query, "mac"));
+    uint8_t address[6];
+
+    if (mac.length() > 0 && (!isValidMac(mac) || !parseMacAddress(mac, address))) {
+        sendJson(client, 400, "{\"ok\":false,\"error\":\"invalid_mac\"}");
+        return;
+    }
+
+    classicBtSpoofMac = mac;
+    preferences.begin(CONFIG_NAMESPACE, false);
+    if (classicBtSpoofMac.length() > 0) {
+        preferences.putString("bt_mac", classicBtSpoofMac);
+    } else {
+        preferences.remove("bt_mac");
+    }
+    preferences.end();
+
+    addLog(classicBtSpoofMac.length() > 0
+        ? String("Classic Bluetooth - Spoof MAC saved for next restart: ") + classicBtSpoofMac
+        : "Classic Bluetooth - Spoofing disabled for next restart.");
+
+    String json = "{\"ok\":true,\"mac\":\"";
+    json += jsonEscape(classicBtSpoofMac);
+    json += "\",\"restartRequired\":true}";
+    sendJson(client, 200, json);
+}
+
 void handleApiRestart(WiFiClient& client) {
     if (stablePcOn || powerState != POWER_IDLE) {
         addLog("SYSTEM - Restart rejected while PC is on or power operation is active.");
@@ -1553,6 +1698,8 @@ void handleWebServer() {
         handleApiManualAdd(client, query);
     } else if (method == "POST" && target == "/api/wifi/save") {
         handleApiWiFiSave(client, query);
+    } else if (method == "POST" && target == "/api/bluetooth/save") {
+        handleApiBluetoothSave(client, query);
     } else if (method == "POST" && target == "/api/restart") {
         handleApiRestart(client);
     } else if (method == "POST" && target == "/api/power/on") {
@@ -1653,8 +1800,16 @@ void setup() {
     preferences.begin(CONFIG_NAMESPACE, true);
     currentSlot = preferences.getInt("slot", 0);
     webScanRssiThreshold = preferences.getInt("rssi", DEFAULT_WEB_SCAN_RSSI_THRESHOLD);
+    classicBtSpoofMac = normalizeMac(preferences.getString("bt_mac", ""));
     if (webScanRssiThreshold < -100) webScanRssiThreshold = -100;
     if (webScanRssiThreshold > -20) webScanRssiThreshold = -20;
+
+    uint8_t storedSpoofAddress[6];
+    if (classicBtSpoofMac.length() > 0 &&
+        (!isValidMac(classicBtSpoofMac) || !parseMacAddress(classicBtSpoofMac, storedSpoofAddress))) {
+        addLog("Classic Bluetooth - Ignoring invalid saved spoof MAC.");
+        classicBtSpoofMac = "";
+    }
 
     addLog("Controllers - Loading saved...");
     int count = 0;
@@ -1667,6 +1822,10 @@ void setup() {
     }
     if (count == 0) addLog("Controllers - No saved controllers");
     preferences.end();
+
+    // Bluetooth and WiFi initialize the shared radio below. The interface MAC
+    // must be selected before either stack starts using it.
+    applyClassicBluetoothSpoof();
 
     loadWiFiSettings();
     setupWiFi();
@@ -1688,6 +1847,7 @@ void loop() {
     // Update stable inputs and advance any in-progress relay sequence before
     // reacting to BLE or button events.
     updatePcState();
+    updateClassicPageScan();
     handlePowerState();
     syncAtxPsuRelay();
     handleShutdownTracking(now); // Turns off PSU after PC shutdown and starts 60s ignore timer
