@@ -180,6 +180,22 @@ If the ESP32 board has no onboard USB-to-serial interface, an Arduino Nano can b
 11. Test web or physical-button power-on first, then test controller wake.
 12. Start a normal OS shutdown and confirm that `PS_ON` remains active until the monitor signal goes low.
 
+### Recommended Bluetooth Classic setup
+
+For the best compatibility with Bluetooth Classic controllers, pair each controller with the BC250 first and confirm that it works normally in the BC250 operating system. A paired Classic controller may stop advertising itself as discoverable and instead try to reconnect directly to the Bluetooth adapter address it remembers.
+
+After pairing, find the Bluetooth adapter MAC address on the BC250:
+
+  ```bash
+  bluetoothctl list
+  ```
+
+  Use the MAC address reported for the BC250 Bluetooth adapter or Bluetooth network connection.
+
+In the ESP32 web interface, enter this address under **PC Bluetooth spoof address**, select **Save**, and restart the ESP32 while the BC250 is off. This is the BC250 adapter address, not the controller address. Each controller must still be added separately to the ESP32's **Registered controllers** list.
+
+When the BC250 is off, the ESP32 temporarily uses the saved adapter address for Bluetooth Classic. This lets it detect a registered controller attempting to reconnect to the BC250 even when that controller is not discoverable through a normal inquiry. Once the BC250 turns on, the ESP32 stops answering under the spoofed address so the real BC250 Bluetooth adapter can take over. Leaving **PC Bluetooth spoof address** empty disables this behavior.
+
 ## Web interface
 
 <img src="img/webUI_mobile_AP.png" alt="BC250 ESP ATX PSU WebUI" width="300"/>
@@ -196,6 +212,7 @@ The portal provides:
 - A 15-second BLE/Bluetooth Classic scan for new devices.
 - Adjustable discovery RSSI threshold from -100 to -20 dBm.
 - Manual controller registration in `aa:bb:cc:dd:ee:ff` format.
+- Persistent PC Bluetooth adapter spoof-address configuration for paired Bluetooth Classic controllers.
 - Persistent 2.4 GHz router SSID/password configuration.
 - A guarded ESP32 restart button, enabled only while the PC is off and the power state machine is idle.
 - The latest 40 in-memory log lines.
