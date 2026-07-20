@@ -1604,6 +1604,7 @@ async function saveScanOptions() {
   const inquiry = byId('scanClassicInquiryEnabled').checked;
   const paired = byId('scanClassicPairedEnabled').checked;
   const message = byId('scanOptionsMessage');
+  if (!ble && !inquiry) byId('scanBtn').disabled = true;
   const path = '/api/scan/options?ble=' + (ble ? '1' : '0') + '&inquiry=' + (inquiry ? '1' : '0') + '&paired=' + (paired ? '1' : '0');
   message.textContent = 'Saving scan options…';
   try {
@@ -1804,8 +1805,8 @@ async function refresh() {
       applyWebPasswordState(wifiConfig.webPasswordEnabled);
       deviceConfigLoaded = true;
     }
-    const noScanMethods = !byId('scanBleEnabled').checked && !byId('scanClassicInquiryEnabled').checked && !byId('scanClassicPairedEnabled').checked;
-    byId('scanBtn').disabled = status.scanning || noScanMethods;
+    const noDiscoveryMethods = !byId('scanBleEnabled').checked && !byId('scanClassicInquiryEnabled').checked;
+    byId('scanBtn').disabled = status.scanning || noDiscoveryMethods;
     const pairedBox = byId('paired');
     pairedBox.replaceChildren();
     if (!paired.length) pairedBox.appendChild(empty('No controllers registered yet.'));
@@ -1878,8 +1879,8 @@ void handleApiRemove(WiFiClient& client, const String& query) {
 }
 
 void handleApiStartScan(WiFiClient& client) {
-    if (!bleControllerScanEnabled && !classicInquiryScanEnabled && !classicPairedScanEnabled) {
-        addLog("CONTROLLER - Web scan rejected: all scan methods are disabled.");
+    if (!bleControllerScanEnabled && !classicInquiryScanEnabled) {
+        addLog("CONTROLLER - Web scan rejected: BLE and Classic pairing scans are disabled.");
         sendJson(client, 409, "{\"ok\":false,\"error\":\"no_scan_methods\"}");
         return;
     }
@@ -2039,6 +2040,11 @@ void handleApiScanOptionsSave(WiFiClient& client, const String& query) {
     bleControllerScanEnabled = bleValue == "1";
     classicInquiryScanEnabled = inquiryValue == "1";
     classicPairedScanEnabled = pairedValue == "1";
+
+    if (!bleControllerScanEnabled && !classicInquiryScanEnabled && webScanActive) {
+        webScanActive = false;
+        addLog("CONTROLLER - Web scan stopped: BLE and Classic pairing scans are disabled.");
+    }
 
     preferences.begin(CONFIG_NAMESPACE, false);
     preferences.putBool("scan_ble", bleControllerScanEnabled);
