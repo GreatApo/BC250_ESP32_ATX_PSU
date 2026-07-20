@@ -210,6 +210,7 @@ The portal provides:
 - **Power on** and **Power off** controls.
 - The five saved-controller slots with removal controls.
 - A 15-second BLE/Bluetooth Classic scan for new devices.
+- Persistent toggles for BLE, pairing-mode Bluetooth Classic, and spoof-address reconnect detection; all three default to enabled.
 - Adjustable discovery RSSI threshold from -100 to -20 dBm.
 - Manual controller registration in `aa:bb:cc:dd:ee:ff` format.
 - Persistent PC Bluetooth adapter spoof-address configuration for paired Bluetooth Classic controllers.
@@ -268,6 +269,7 @@ The web UI uses a small unauthenticated HTTP API. It can also be called by trust
 | `POST` | `/api/power/on` | Request power-on |
 | `POST` | `/api/power/off` | Request normal shutdown |
 | `POST` | `/api/scan/start` | Start controller discovery |
+| `POST` | `/api/scan/options?ble=1&inquiry=1&paired=1` | Enable or disable the three persisted controller-detection methods |
 | `POST` | `/api/pair?mac=aa%3Abb%3Acc%3Add%3Aee%3Aff` | Save a controller from current results |
 | `POST` | `/api/manual-add?mac=aa%3Abb%3Acc%3Add%3Aee%3Aff` | Save a controller manually |
 | `POST` | `/api/remove?slot=0` | Remove a saved slot; slots are zero-based |

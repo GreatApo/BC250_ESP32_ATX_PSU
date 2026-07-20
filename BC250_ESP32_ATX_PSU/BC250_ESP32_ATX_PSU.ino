@@ -30,6 +30,9 @@ const char* WIFI_CONFIG_NAMESPACE = "wifi_cfg";
 String wifiSsid = DEFAULT_WIFI_SSID;
 String wifiPassword = DEFAULT_WIFI_PASSWORD;
 String classicBtSpoofMac = "";
+bool bleControllerScanEnabled = true;
+bool classicInquiryScanEnabled = true;
+bool classicPairedScanEnabled = true;
 
 WiFiServer server(80);
 
@@ -562,6 +565,7 @@ void handleClassicDevice(const String& deviceMAC, const String& deviceName, int 
 
 void classicGapCallback(esp_bt_gap_cb_event_t event, esp_bt_gap_cb_param_t* param) {
     if (event == ESP_BT_GAP_DISC_RES_EVT) {
+        if (!classicInquiryScanEnabled) return;
         String deviceMAC = classicAddressToString(param->disc_res.bda);
         String deviceName = "";
         int rssi = -127;
@@ -579,6 +583,7 @@ void classicGapCallback(esp_bt_gap_cb_event_t event, esp_bt_gap_cb_param_t* para
         }
     } else if (event == ESP_BT_GAP_ACL_CONN_CMPL_STAT_EVT &&
                classicBtSpoofEnabled &&
+               classicPairedScanEnabled &&
                param->acl_conn_cmpl_stat.stat == ESP_BT_STATUS_SUCCESS) {
         // A gamepad paired to the PC pages the PC adapter's address instead of
         // entering inquiry/discoverable mode. With that address spoofed, the
@@ -595,7 +600,7 @@ void updateClassicPageScan() {
     // Do not answer under the PC adapter's address once the real PC adapter is
     // powered. Re-enable page scan only while the PC is off and the ESP32 is
     // responsible for noticing controllers looking for their paired host.
-    bool shouldEnable = !stablePcOn;
+    bool shouldEnable = classicPairedScanEnabled && !stablePcOn;
     if (classicPageScanTargetInitialized && shouldEnable == classicPageScanTargetEnabled) return;
 
     classicPageScanTargetInitialized = true;
@@ -642,6 +647,7 @@ void protectSetupApClient() {
 void scanClassicBluetooth() {
     unsigned long now = millis();
 
+    if (!classicInquiryScanEnabled) return;
     if (buttonIsPressed()) return;
 
     if (webScanActive && now - webScanStartTime >= WEB_SCAN_DURATION_MS) {
@@ -784,6 +790,7 @@ void handleButton(unsigned long now) {
 void scanBle() {
     unsigned long now = millis();
 
+    if (!bleControllerScanEnabled) return;
     // Keep button holds responsive. BLE scan blocks the loop, so skip it while
     // the user is holding the button and needs live LED/mode feedback.
     if (buttonIsPressed()) return;
@@ -912,7 +919,13 @@ String wifiConfigJson() {
     json += jsonEscape(WEB_HOSTNAME);
     json += "\",\"classicBtSpoofMac\":\"";
     json += jsonEscape(classicBtSpoofMac);
-    json += "\"}";
+    json += "\",\"bleScanEnabled\":";
+    json += bleControllerScanEnabled ? "true" : "false";
+    json += ",\"classicInquiryScanEnabled\":";
+    json += classicInquiryScanEnabled ? "true" : "false";
+    json += ",\"classicPairedScanEnabled\":";
+    json += classicPairedScanEnabled ? "true" : "false";
+    json += "}";
     return json;
 }
 
@@ -1153,6 +1166,8 @@ void handleWebRoot(WiFiClient& client) {
     .item-meta { color: var(--muted); font-size: .72rem; }
     code { color: #aec4dc; font-family: "SFMono-Regular", Consolas, monospace; font-size: .72rem; }
     .empty { padding: 18px; border: 1px dashed #2c3c50; border-radius: 11px; color: var(--muted); text-align: center; font-size: .78rem; }
+    .scan-options { display: grid; gap: 8px; margin-bottom: 14px; padding: 12px; border: 1px solid #29384b; border-radius: 11px; background: #0c141e; }
+    .scan-options .check-row { margin-top: 0; }
     .scan-tools { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 13px; }
     .rssi-tools { display: flex; gap: 8px; align-items: center; }
     .rssi-tools label { color: var(--muted); font-size: .72rem; }
@@ -1223,12 +1238,20 @@ void handleWebRoot(WiFiClient& client) {
           <label class="field" for="manualMac">Add by Bluetooth address</label>
           <div class="field-row"><input id="manualMac" aria-label="Controller Bluetooth address" placeholder="aa:bb:cc:dd:ee:ff" maxlength="17"><button onclick="manualAdd()">Add controller</button></div>
           <div class="hint">Use the manual address if a controller does not appear in a nearby scan.</div>
+          <div class="section-rule"></div>
+          <label class="field field-with-info"><span>Controller detection methods</span><span class="info-tip" tabindex="0" aria-label="About controller detection methods"><span aria-hidden="true">i</span><span class="tooltip" role="tooltip">These options control both controller discovery and background detection used to turn on the PC.<br/><br/><b>Bluetooth Low Energy (BLE) mode</b> listens for BLE advertisements.<br/><b>Bluetooth Classic (pairing mode)</b> runs Classic inquiries while controllers are discoverable.<br/><b>Bluetooth Classic (paired to the spoofed address)</b> listens for reconnect attempts from controllers paired with the configured spoof address.<br/><br/>Disabling unused methods can reduce radio contention and improve detection time. Changes are saved immediately.</span></span></label>
+          <div class="scan-options" aria-label="Controller detection methods">
+            <label class="row check-row" for="scanBleEnabled"><input id="scanBleEnabled" type="checkbox" checked onchange="saveScanOptions()"><span>Bluetooth Low Energy (BLE) mode</span></label>
+            <label class="row check-row" for="scanClassicInquiryEnabled"><input id="scanClassicInquiryEnabled" type="checkbox" checked onchange="saveScanOptions()"><span>Bluetooth Classic (pairing mode)</span></label>
+            <label class="row check-row" for="scanClassicPairedEnabled"><input id="scanClassicPairedEnabled" type="checkbox" checked onchange="saveScanOptions()"><span>Bluetooth Classic (paired to the spoofed address)</span></label>
+            <div class="message" id="scanOptionsMessage">Changes are saved and applied immediately.</div>
+          </div>
         </section>
 
         <section class="card panel">
           <div class="panel-head"><div><div class="panel-title"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg><h2>Discover controllers</h2></div><div class="eyebrow">Search for nearby BLE or Classic Bluetooth gamepads</div></div><span id="scanState" class="badge">Idle</span></div>
           <div class="scan-tools">
-            <button id="scanBtn" onclick="post('/api/scan/start', 'Controller scan started')">Start scan</button>
+            <button id="scanBtn" onclick="post('/api/scan/start', 'Controller scan started')">Test scan</button>
             <div class="rssi-tools field-with-info"><label class="field-with-info" for="rssiInput"><span>Signal filter</span><span class="info-tip" tabindex="0" aria-label="About the signal strength filter"><span aria-hidden="true">i</span><span class="tooltip" role="tooltip">A higher dBm value is stricter:<br/>-45 finds close devices,<br/>-70 covers a typical room.<br/><br/>Values should be negative.</span></span></label><input id="rssiInput" type="number" min="-100" max="-20" step="1" aria-label="RSSI threshold"><button id="rssiBtn" class="secondary compact" onclick="setRssi()">Apply</button></div>
           </div>
           <div id="found"><div class="empty">Start a scan to find nearby controllers.</div></div>
@@ -1306,6 +1329,25 @@ async function setRssi() {
   const value = byId('rssiInput').value;
   const response = await fetch('/api/rssi?value=' + encodeURIComponent(value), { method: 'POST', cache: 'no-store' });
   notify(response.ok ? 'Signal strength filter updated' : 'Could not update signal strength filter');
+  scheduleRefresh();
+}
+async function saveScanOptions() {
+  const ble = byId('scanBleEnabled').checked;
+  const inquiry = byId('scanClassicInquiryEnabled').checked;
+  const paired = byId('scanClassicPairedEnabled').checked;
+  const message = byId('scanOptionsMessage');
+  const path = '/api/scan/options?ble=' + (ble ? '1' : '0') + '&inquiry=' + (inquiry ? '1' : '0') + '&paired=' + (paired ? '1' : '0');
+  message.textContent = 'Saving scan options…';
+  try {
+    const response = await fetch(path, { method: 'POST', cache: 'no-store' });
+    if (!response.ok) throw new Error('Request failed');
+    message.textContent = 'Saved and applied immediately.';
+    notify('Controller scan options updated');
+  } catch (error) {
+    deviceConfigLoaded = false;
+    message.textContent = 'Could not save controller scan options.';
+    notify('Could not update scan options');
+  }
   scheduleRefresh();
 }
 function openNetworkChanged() {
@@ -1409,7 +1451,6 @@ async function refresh() {
     byId('activitySummary').textContent = status.scanning ? 'Scanning' : (status.busy ? 'Power task' : 'Idle');
     byId('powerOnBtn').disabled = status.pcOn || status.busy;
     byId('powerOffBtn').disabled = !status.pcOn || status.busy;
-    byId('scanBtn').disabled = status.scanning;
     byId('rssiBtn').disabled = status.scanning;
     byId('restartBtn').disabled = status.pcOn || status.busy;
     byId('wifiState').textContent = formatState(status.wifi);
@@ -1427,8 +1468,13 @@ async function refresh() {
       byId('wifiSsid').value = wifiConfig.ssid;
       byId('wifiPassword').placeholder = wifiConfig.hasPassword ? 'Saved password (leave blank to keep)' : 'Leave blank for an open network';
       byId('btSpoofMac').value = wifiConfig.classicBtSpoofMac || '';
+      byId('scanBleEnabled').checked = wifiConfig.bleScanEnabled;
+      byId('scanClassicInquiryEnabled').checked = wifiConfig.classicInquiryScanEnabled;
+      byId('scanClassicPairedEnabled').checked = wifiConfig.classicPairedScanEnabled;
       deviceConfigLoaded = true;
     }
+    const noScanMethods = !byId('scanBleEnabled').checked && !byId('scanClassicInquiryEnabled').checked && !byId('scanClassicPairedEnabled').checked;
+    byId('scanBtn').disabled = status.scanning || noScanMethods;
     const pairedBox = byId('paired');
     pairedBox.replaceChildren();
     if (!paired.length) pairedBox.appendChild(empty('No controllers registered yet.'));
@@ -1501,6 +1547,12 @@ void handleApiRemove(WiFiClient& client, const String& query) {
 }
 
 void handleApiStartScan(WiFiClient& client) {
+    if (!bleControllerScanEnabled && !classicInquiryScanEnabled && !classicPairedScanEnabled) {
+        addLog("CONTROLLER - Web scan rejected: all scan methods are disabled.");
+        sendJson(client, 409, "{\"ok\":false,\"error\":\"no_scan_methods\"}");
+        return;
+    }
+
     clearFoundControllers();
     webScanActive = true;
     webScanStartTime = millis();
@@ -1620,6 +1672,46 @@ void handleApiBluetoothSave(WiFiClient& client, const String& query) {
     sendJson(client, 200, json);
 }
 
+void handleApiScanOptionsSave(WiFiClient& client, const String& query) {
+    String bleValue = queryParam(query, "ble");
+    String inquiryValue = queryParam(query, "inquiry");
+    String pairedValue = queryParam(query, "paired");
+    if ((bleValue != "0" && bleValue != "1") ||
+        (inquiryValue != "0" && inquiryValue != "1") ||
+        (pairedValue != "0" && pairedValue != "1")) {
+        sendJson(client, 400, "{\"ok\":false,\"error\":\"invalid_scan_options\"}");
+        return;
+    }
+
+    bool wasClassicInquiryEnabled = classicInquiryScanEnabled;
+    bool wasBleEnabled = bleControllerScanEnabled;
+    bleControllerScanEnabled = bleValue == "1";
+    classicInquiryScanEnabled = inquiryValue == "1";
+    classicPairedScanEnabled = pairedValue == "1";
+
+    preferences.begin(CONFIG_NAMESPACE, false);
+    preferences.putBool("scan_ble", bleControllerScanEnabled);
+    preferences.putBool("scan_inquiry", classicInquiryScanEnabled);
+    preferences.putBool("scan_paired", classicPairedScanEnabled);
+    preferences.end();
+
+    if (wasClassicInquiryEnabled && !classicInquiryScanEnabled && classicDiscoveryRunning && !classicDiscoveryCancelRequested) {
+        if (esp_bt_gap_cancel_discovery() == ESP_OK) classicDiscoveryCancelRequested = true;
+    }
+    if (!wasBleEnabled && bleControllerScanEnabled) {
+        lastBleScanTime = millis() - BLE_SCAN_INTERVAL_MS;
+    }
+    if (!wasClassicInquiryEnabled && classicInquiryScanEnabled) {
+        lastClassicScanTime = millis() - CLASSIC_SCAN_INTERVAL_MS;
+    }
+    updateClassicPageScan();
+
+    addLog(String("CONTROLLER - Scan options saved: BLE ") + (bleControllerScanEnabled ? "on" : "off") +
+           ", Classic pairing " + (classicInquiryScanEnabled ? "on" : "off") +
+           ", Classic paired " + (classicPairedScanEnabled ? "on" : "off"));
+    sendJson(client, 200, "{\"ok\":true}");
+}
+
 void handleApiRestart(WiFiClient& client) {
     if (stablePcOn || powerState != POWER_IDLE) {
         addLog("SYSTEM - Restart rejected while PC is on or power operation is active.");
@@ -1731,6 +1823,8 @@ void handleWebServer() {
         handleApiWiFiSave(client, query);
     } else if (method == "POST" && target == "/api/bluetooth/save") {
         handleApiBluetoothSave(client, query);
+    } else if (method == "POST" && target == "/api/scan/options") {
+        handleApiScanOptionsSave(client, query);
     } else if (method == "POST" && target == "/api/restart") {
         handleApiRestart(client);
     } else if (method == "POST" && target == "/api/power/on") {
@@ -1833,6 +1927,9 @@ void setup() {
     currentSlot = preferences.getInt("slot", 0);
     webScanRssiThreshold = preferences.getInt("rssi", DEFAULT_WEB_SCAN_RSSI_THRESHOLD);
     classicBtSpoofMac = normalizeMac(preferences.getString("bt_mac", ""));
+    bleControllerScanEnabled = preferences.getBool("scan_ble", true);
+    classicInquiryScanEnabled = preferences.getBool("scan_inquiry", true);
+    classicPairedScanEnabled = preferences.getBool("scan_paired", true);
     if (webScanRssiThreshold < -100) webScanRssiThreshold = -100;
     if (webScanRssiThreshold > -20) webScanRssiThreshold = -20;
 
