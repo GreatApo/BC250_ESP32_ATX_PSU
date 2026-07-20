@@ -306,6 +306,15 @@ bool isKnownController(const String& deviceMAC) {
     return false;
 }
 
+bool canWakeFromController(const String& deviceMAC, unsigned long now) {
+    if (powerState != POWER_IDLE) return false;
+    if (stablePcOn) return false;
+    if (!isKnownController(deviceMAC)) return false;
+    if (lastShutdownTime > 0 && now - lastShutdownTime < SHUTDOWN_COOLDOWN_MS) return false;
+    if (now - lastWakeTime < WAKE_COOLDOWN_MS) return false;
+    return true;
+}
+
 bool hasSavedController() {
     for (int i = 0; i < MAX_CONTROLLERS; i++) {
         if (savedMACs[i].length() > 0) return true;
@@ -384,11 +393,14 @@ bool removeController(int slot) {
     return true;
 }
 
-void saveRssiThreshold(int threshold) {
-    if (threshold < -100) threshold = -100;
-    if (threshold > -20) threshold = -20;
+int clampRssiThreshold(int threshold) {
+    if (threshold < -100) return -100;
+    if (threshold > -20) return -20;
+    return threshold;
+}
 
-    webScanRssiThreshold = threshold;
+void saveRssiThreshold(int threshold) {
+    webScanRssiThreshold = clampRssiThreshold(threshold);
 
     preferences.begin(CONFIG_NAMESPACE, false);
     preferences.putInt("rssi", webScanRssiThreshold);
@@ -593,11 +605,7 @@ void handleClassicDevice(const String& deviceMAC, const String& deviceName, int 
         return;
     }
 
-    if (powerState != POWER_IDLE) return;
-    if (stablePcOn) return;
-    if (!isKnownController(deviceMAC)) return;
-    if (lastShutdownTime > 0 && now - lastShutdownTime < SHUTDOWN_COOLDOWN_MS) return;
-    if (now - lastWakeTime < WAKE_COOLDOWN_MS) return;
+    if (!canWakeFromController(deviceMAC, now)) return;
 
     addLog("Classic Bluetooth - Known controller detected! Turning on ATX PSU and PC...");
     startAtxPowerOnSequence();
@@ -742,11 +750,7 @@ class MyAdvertisedDeviceCallbacks: public BLEAdvertisedDeviceCallbacks {
         // The BLE scanner sees many repeated advertisements. These gates keep
         // wake requests quiet unless this is a known controller and the PC can
         // safely be woken.
-        if (powerState != POWER_IDLE) return;
-        if (stablePcOn) return;
-        if (!isKnownController(deviceMAC)) return;
-        if (lastShutdownTime > 0 && now - lastShutdownTime < SHUTDOWN_COOLDOWN_MS) return;
-        if (now - lastWakeTime < WAKE_COOLDOWN_MS) return;
+        if (!canWakeFromController(deviceMAC, now)) return;
 
         addLog("BLE - Known controller detected! Turning on ATX PSU and PC...");
         startAtxPowerOnSequence();
@@ -1120,33 +1124,28 @@ void stopSetupAp() {
     addLog("AP - Setup stopped after router WiFi connected.");
 }
 
-void sendResponse(WiFiClient& client, int code, const char* type, const String& body) {
+void sendResponse(WiFiClient& client, int code, const char* type, const String& body, const String* cookie) {
     client.print("HTTP/1.1 ");
     client.print(code);
     client.println(code == 200 ? " OK" : " Error");
     client.print("Content-Type: ");
     client.println(type);
     client.println("Cache-Control: no-store");
+    if (cookie != nullptr) {
+        client.print("Set-Cookie: ");
+        client.println(*cookie);
+    }
     client.println("Connection: close");
     client.println();
     client.print(body);
 }
 
 void sendJson(WiFiClient& client, int code, const String& json) {
-    sendResponse(client, code, "application/json; charset=utf-8", json);
+    sendResponse(client, code, "application/json; charset=utf-8", json, nullptr);
 }
 
 void sendJsonWithCookie(WiFiClient& client, int code, const String& json, const String& cookie) {
-    client.print("HTTP/1.1 ");
-    client.print(code);
-    client.println(code == 200 ? " OK" : " Error");
-    client.println("Content-Type: application/json; charset=utf-8");
-    client.println("Cache-Control: no-store");
-    client.print("Set-Cookie: ");
-    client.println(cookie);
-    client.println("Connection: close");
-    client.println();
-    client.print(json);
+    sendResponse(client, code, "application/json; charset=utf-8", json, &cookie);
 }
 
 String sessionCookieValue() {
@@ -2331,14 +2330,13 @@ void setup() {
 
     preferences.begin(CONFIG_NAMESPACE, true);
     currentSlot = preferences.getInt("slot", 0);
-    webScanRssiThreshold = preferences.getInt("rssi", DEFAULT_WEB_SCAN_RSSI_THRESHOLD);
+    webScanRssiThreshold = clampRssiThreshold(
+        preferences.getInt("rssi", DEFAULT_WEB_SCAN_RSSI_THRESHOLD)
+    );
     classicBtSpoofMac = normalizeMac(preferences.getString("bt_mac", ""));
     bleControllerScanEnabled = preferences.getBool("scan_ble", true);
     classicInquiryScanEnabled = preferences.getBool("scan_inquiry", true);
     classicPairedScanEnabled = preferences.getBool("scan_paired", true);
-    if (webScanRssiThreshold < -100) webScanRssiThreshold = -100;
-    if (webScanRssiThreshold > -20) webScanRssiThreshold = -20;
-
     uint8_t storedSpoofAddress[6];
     if (classicBtSpoofMac.length() > 0 &&
         (!isValidMac(classicBtSpoofMac) || !parseMacAddress(classicBtSpoofMac, storedSpoofAddress))) {
