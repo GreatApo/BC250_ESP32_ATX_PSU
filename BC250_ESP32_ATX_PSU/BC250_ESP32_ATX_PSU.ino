@@ -72,7 +72,9 @@ const int DEFAULT_WEB_SCAN_RSSI_THRESHOLD = -55;        // Filter out weak BLE s
 const char* CONFIG_NAMESPACE = "xbox_cfg";
 const int MAX_CONTROLLERS = 5;
 const int MAX_FOUND_CONTROLLERS = 10;
+const int MAX_CONTROLLER_NICKNAME_LENGTH = 32;
 String savedMACs[MAX_CONTROLLERS];
+String savedControllerNicknames[MAX_CONTROLLERS];
 int currentSlot = 0;
 
 struct FoundController {
@@ -311,7 +313,18 @@ bool hasSavedController() {
     return false;
 }
 
-void saveController(const String& deviceMAC) {
+String normalizeControllerNickname(const String& value) {
+    String nickname;
+    nickname.reserve(value.length());
+    for (unsigned int i = 0; i < value.length() && nickname.length() < MAX_CONTROLLER_NICKNAME_LENGTH; i++) {
+        char c = value.charAt(i);
+        if ((uint8_t)c >= 0x20 && c != 0x7f) nickname += c;
+    }
+    nickname.trim();
+    return nickname;
+}
+
+void saveController(const String& deviceMAC, const String& nickname = "") {
     if (isKnownController(deviceMAC)) return;
 
     int slotToUse = -1;
@@ -329,13 +342,33 @@ void saveController(const String& deviceMAC) {
     // Save into a rotating slot so adding a sixth controller replaces the
     // oldest remembered slot rather than growing storage forever.
     savedMACs[slotToUse] = deviceMAC;
+    savedControllerNicknames[slotToUse] = normalizeControllerNickname(nickname);
 
     preferences.begin(CONFIG_NAMESPACE, false);
     preferences.putString(("mac" + String(slotToUse)).c_str(), deviceMAC);
+    if (savedControllerNicknames[slotToUse].length() > 0) {
+        preferences.putString(("name" + String(slotToUse)).c_str(), savedControllerNicknames[slotToUse]);
+    } else {
+        preferences.remove(("name" + String(slotToUse)).c_str());
+    }
 
     currentSlot = (slotToUse + 1) % MAX_CONTROLLERS;
     preferences.putInt("slot", currentSlot);
     preferences.end();
+}
+
+bool saveControllerNickname(int slot, const String& nickname) {
+    if (slot < 0 || slot >= MAX_CONTROLLERS || savedMACs[slot].length() == 0) return false;
+
+    savedControllerNicknames[slot] = normalizeControllerNickname(nickname);
+    preferences.begin(CONFIG_NAMESPACE, false);
+    if (savedControllerNicknames[slot].length() > 0) {
+        preferences.putString(("name" + String(slot)).c_str(), savedControllerNicknames[slot]);
+    } else {
+        preferences.remove(("name" + String(slot)).c_str());
+    }
+    preferences.end();
+    return true;
 }
 
 bool removeController(int slot) {
@@ -343,8 +376,10 @@ bool removeController(int slot) {
     if (savedMACs[slot].length() == 0) return false;
 
     savedMACs[slot] = "";
+    savedControllerNicknames[slot] = "";
     preferences.begin(CONFIG_NAMESPACE, false);
     preferences.remove(("mac" + String(slot)).c_str());
+    preferences.remove(("name" + String(slot)).c_str());
     preferences.end();
     return true;
 }
@@ -849,6 +884,8 @@ String controllersJson() {
         json += i;
         json += ",\"mac\":\"";
         json += jsonEscape(savedMACs[i]);
+        json += "\",\"name\":\"";
+        json += jsonEscape(savedControllerNicknames[i]);
         json += "\"}";
         first = false;
     }
@@ -1340,6 +1377,7 @@ void handleWebRoot(WiFiClient& client) {
     .section-rule { height: 1px; background: var(--line); margin: 18px 0; }
     .row { display: flex; gap: 9px; align-items: center; flex-wrap: wrap; }
     .field-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 9px; }
+    .controller-add-row { grid-template-columns: minmax(150px, 1.2fr) minmax(120px, 1fr) auto; }
     label.field { display: block; margin: 13px 0 6px; color: #a6b4c5; font-size: .76rem; font-weight: 650; }
     label.field-with-info { display: flex; align-items: center; gap: 7px; }
     .info-tip {
@@ -1451,7 +1489,7 @@ void handleWebRoot(WiFiClient& client) {
           <div id="paired"><div class="empty">Loading controllers…</div></div>
           <div class="section-rule"></div>
           <label class="field" for="manualMac">Add by Bluetooth address</label>
-          <div class="field-row"><input id="manualMac" aria-label="Controller Bluetooth address" placeholder="aa:bb:cc:dd:ee:ff" maxlength="17"><button onclick="manualAdd()">Add controller</button></div>
+          <div class="field-row controller-add-row"><input id="manualMac" aria-label="Controller Bluetooth address" placeholder="aa:bb:cc:dd:ee:ff" maxlength="17"><input id="manualNickname" aria-label="Controller nickname" placeholder="Nickname (optional)" maxlength="32"><button onclick="manualAdd()">Add controller</button></div>
           <div class="hint">Use the manual address if a controller does not appear in a nearby scan.</div>
           <div class="section-rule"></div>
           <label class="field field-with-info"><span>Controller detection methods</span><span class="info-tip" tabindex="0" aria-label="About controller detection methods"><span aria-hidden="true">i</span><span class="tooltip" role="tooltip">These options control both controller discovery and background detection used to turn on the PC.<br/><br/><b>Bluetooth Low Energy (BLE) mode</b> listens for BLE advertisements.<br/><b>Bluetooth Classic (pairing mode)</b> runs Classic inquiries while controllers are discoverable.<br/><b>Bluetooth Classic (paired to the spoofed address)</b> listens for reconnect attempts from controllers paired with the configured spoof address.<br/><br/>Disabling unused methods can reduce radio contention and improve detection time. Changes are saved immediately.</span></span></label>
@@ -1550,8 +1588,9 @@ function powerOff() {
 }
 async function manualAdd() {
   const mac = byId('manualMac').value.trim();
-  const response = await fetch('/api/manual-add?mac=' + encodeURIComponent(mac), { method: 'POST', cache: 'no-store' });
-  if (response.ok) { byId('manualMac').value = ''; notify('Controller added'); }
+  const nickname = byId('manualNickname').value.trim();
+  const response = await fetch('/api/manual-add?mac=' + encodeURIComponent(mac) + '&name=' + encodeURIComponent(nickname), { method: 'POST', cache: 'no-store' });
+  if (response.ok) { byId('manualMac').value = ''; byId('manualNickname').value = ''; notify('Controller added'); }
   else { notify(response.status === 409 ? 'Controller is already registered' : 'Enter a valid Bluetooth address'); }
   scheduleRefresh();
 }
@@ -1682,7 +1721,7 @@ function empty(text) {
   div.textContent = text;
   return div;
 }
-function controllerRow(controller, actionText, actionClass, action) {
+function controllerRow(controller, actionText, actionClass, action, secondaryActionText, secondaryAction) {
   const row = document.createElement('div');
   row.className = 'item';
   const label = document.createElement('div');
@@ -1699,12 +1738,29 @@ function controllerRow(controller, actionText, actionClass, action) {
   meta.appendChild(mac);
   if (controller.rssi !== undefined) meta.append('  ·  ' + controller.rssi + ' dBm');
   label.appendChild(meta);
+  const actions = document.createElement('div');
+  actions.className = 'item-actions';
+  if (secondaryActionText) {
+    const secondaryButton = document.createElement('button');
+    secondaryButton.className = 'secondary compact';
+    secondaryButton.textContent = secondaryActionText;
+    secondaryButton.onclick = secondaryAction;
+    actions.appendChild(secondaryButton);
+  }
   const button = document.createElement('button');
   button.className = (actionClass || 'secondary') + ' compact';
   button.textContent = actionText;
   button.onclick = action;
-  row.append(label, button);
+  actions.appendChild(button);
+  row.append(label, actions);
   return row;
+}
+async function renameController(controller) {
+  const nickname = prompt('Controller nickname (leave blank to remove):', controller.name || '');
+  if (nickname === null) return;
+  const response = await fetch('/api/nickname?slot=' + controller.slot + '&name=' + encodeURIComponent(nickname), { method: 'POST', cache: 'no-store' });
+  notify(response.ok ? 'Controller nickname saved' : 'Could not save controller nickname');
+  scheduleRefresh();
 }
 function formatState(value) {
   return (value || 'idle').replaceAll('_', ' ').replace(/\b\w/g, c => c.toUpperCase());
@@ -1754,7 +1810,7 @@ async function refresh() {
     const pairedBox = byId('paired');
     pairedBox.replaceChildren();
     if (!paired.length) pairedBox.appendChild(empty('No controllers registered yet.'));
-    paired.forEach(c => pairedBox.appendChild(controllerRow(c, 'Remove', 'danger', () => post('/api/remove?slot=' + c.slot, 'Controller removed'))));
+    paired.forEach(c => pairedBox.appendChild(controllerRow(c, 'Remove', 'danger', () => post('/api/remove?slot=' + c.slot, 'Controller removed'), 'Rename', () => renameController(c))));
     const foundBox = byId('found');
     foundBox.replaceChildren();
     if (!found.length) foundBox.appendChild(empty(status.scanning ? 'Listening for nearby controllers…' : 'Start a scan to find nearby controllers.'));
@@ -1860,13 +1916,14 @@ void handleApiPair(WiFiClient& client, const String& query) {
         return;
     }
 
-    saveController(mac);
+    saveController(mac, foundControllers[foundIndex].name);
     addLog(String("CONTROLLER - Web registered controller: ") + mac);
     sendJson(client, 200, "{\"ok\":true}");
 }
 
 void handleApiManualAdd(WiFiClient& client, const String& query) {
     String mac = normalizeMac(queryParam(query, "mac"));
+    String nickname = normalizeControllerNickname(queryParam(query, "name"));
 
     if (!isValidMac(mac)) {
         addLog(String("CONTROLLER - Rejected, invalid MAC: ") + mac);
@@ -1880,8 +1937,27 @@ void handleApiManualAdd(WiFiClient& client, const String& query) {
         return;
     }
 
-    saveController(mac);
-    addLog(String("CONTROLLER - Registered: ") + mac);
+    saveController(mac, nickname);
+    addLog(String("CONTROLLER - Registered: ") + (nickname.length() > 0 ? nickname + " / " : "") + mac);
+    sendJson(client, 200, "{\"ok\":true}");
+}
+
+void handleApiNickname(WiFiClient& client, const String& query) {
+    String slotValue = queryParam(query, "slot");
+    if (slotValue.length() != 1 || slotValue.charAt(0) < '0' || slotValue.charAt(0) > '9') {
+        sendJson(client, 400, "{\"ok\":false,\"error\":\"invalid_slot\"}");
+        return;
+    }
+
+    int slot = slotValue.toInt();
+    String nickname = normalizeControllerNickname(queryParam(query, "name"));
+    if (!saveControllerNickname(slot, nickname)) {
+        sendJson(client, 404, "{\"ok\":false,\"error\":\"controller_not_found\"}");
+        return;
+    }
+
+    String nicknameStatus = nickname.length() > 0 ? String("saved: ") + nickname : "removed";
+    addLog(String("CONTROLLER - Nickname ") + nicknameStatus + " / " + savedMACs[slot]);
     sendJson(client, 200, "{\"ok\":true}");
 }
 
@@ -2147,6 +2223,8 @@ void handleWebServer() {
         handleApiPair(client, query);
     } else if (method == "POST" && target == "/api/manual-add") {
         handleApiManualAdd(client, query);
+    } else if (method == "POST" && target == "/api/nickname") {
+        handleApiNickname(client, query);
     } else if (method == "POST" && target == "/api/wifi/save") {
         handleApiWiFiSave(client, query);
     } else if (method == "POST" && target == "/api/bluetooth/save") {
@@ -2272,8 +2350,13 @@ void setup() {
     int count = 0;
     for (int i = 0; i < MAX_CONTROLLERS; i++) {
         savedMACs[i] = preferences.getString(("mac" + String(i)).c_str(), "");
+        savedControllerNicknames[i] = normalizeControllerNickname(
+            preferences.getString(("name" + String(i)).c_str(), "")
+        );
         if (savedMACs[i] != "") {
-            addLog(String("Saved slot ") + String(i + 1) + ": " + savedMACs[i]);
+            addLog(String("Saved slot ") + String(i + 1) + ": " +
+                (savedControllerNicknames[i].length() > 0 ? savedControllerNicknames[i] + " / " : "") +
+                savedMACs[i]);
             count++;
         }
     }
