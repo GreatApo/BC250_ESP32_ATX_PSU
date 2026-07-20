@@ -6,6 +6,7 @@
 #include <WiFi.h>
 #include <ESPmDNS.h>
 #include <string.h>
+#include "mbedtls/sha256.h"
 #include "esp_gap_bt_api.h"
 #include "esp_mac.h"
 
@@ -26,9 +27,14 @@ const char* DEFAULT_WIFI_PASSWORD = "";
 const char* WEB_HOSTNAME = "bc250-controller";
 const char* WIFI_AP_PASSWORD = "12345678"; // Leave empty for an open setup AP, or use 8+ chars.
 const char* WIFI_CONFIG_NAMESPACE = "wifi_cfg";
+const char* WEB_AUTH_NAMESPACE = "web_auth";
+const char* WEB_SESSION_COOKIE = "bc250_session";
 
 String wifiSsid = DEFAULT_WIFI_SSID;
 String wifiPassword = DEFAULT_WIFI_PASSWORD;
+String webPasswordSalt = "";
+String webPasswordHash = "";
+String webSessionToken = "";
 String classicBtSpoofMac = "";
 bool bleControllerScanEnabled = true;
 bool classicInquiryScanEnabled = true;
@@ -888,6 +894,103 @@ String wifiStatusName(wl_status_t status) {
     }
 }
 
+String bytesToHex(const uint8_t* bytes, size_t length) {
+    static const char hex[] = "0123456789abcdef";
+    String result;
+    result.reserve(length * 2);
+    for (size_t i = 0; i < length; i++) {
+        result += hex[bytes[i] >> 4];
+        result += hex[bytes[i] & 0x0f];
+    }
+    return result;
+}
+
+String randomHex(size_t byteCount) {
+    String result;
+    result.reserve(byteCount * 2);
+    while (byteCount > 0) {
+        uint32_t value = esp_random();
+        size_t take = byteCount < sizeof(value) ? byteCount : sizeof(value);
+        result += bytesToHex(reinterpret_cast<const uint8_t*>(&value), take);
+        byteCount -= take;
+    }
+    return result;
+}
+
+String hashWebPassword(const String& password, const String& salt) {
+    // Repeated salted SHA-256 avoids keeping the WebUI password itself in NVS.
+    // The work factor also makes password guesses more expensive than one hash.
+    const int rounds = 4096;
+    uint8_t digest[32];
+    mbedtls_sha256_context context;
+
+    mbedtls_sha256_init(&context);
+    mbedtls_sha256_starts(&context, 0);
+    mbedtls_sha256_update(&context, reinterpret_cast<const unsigned char*>(salt.c_str()), salt.length());
+    mbedtls_sha256_update(&context, reinterpret_cast<const unsigned char*>(password.c_str()), password.length());
+    mbedtls_sha256_finish(&context, digest);
+
+    for (int round = 1; round < rounds; round++) {
+        mbedtls_sha256_starts(&context, 0);
+        mbedtls_sha256_update(&context, digest, sizeof(digest));
+        mbedtls_sha256_update(&context, reinterpret_cast<const unsigned char*>(password.c_str()), password.length());
+        mbedtls_sha256_finish(&context, digest);
+        if ((round & 0xff) == 0) yield();
+    }
+    mbedtls_sha256_free(&context);
+    return bytesToHex(digest, sizeof(digest));
+}
+
+bool constantTimeEquals(const String& left, const String& right) {
+    if (left.length() != right.length()) return false;
+    uint8_t difference = 0;
+    for (unsigned int i = 0; i < left.length(); i++) {
+        difference |= static_cast<uint8_t>(left.charAt(i) ^ right.charAt(i));
+    }
+    return difference == 0;
+}
+
+bool webPasswordConfigured() {
+    return webPasswordSalt.length() == 32 && webPasswordHash.length() == 64;
+}
+
+void loadWebAuthSettings() {
+    preferences.begin(WEB_AUTH_NAMESPACE, true);
+    webPasswordSalt = preferences.getString("salt", "");
+    webPasswordHash = preferences.getString("hash", "");
+    preferences.end();
+
+    if (!webPasswordConfigured()) {
+        webPasswordSalt = "";
+        webPasswordHash = "";
+    }
+    webSessionToken = randomHex(32);
+}
+
+bool saveWebPassword(const String& password) {
+    if (password.length() < 8 || password.length() > 64) return false;
+
+    String salt = randomHex(16);
+    String hash = hashWebPassword(password, salt);
+    if (salt.length() != 32 || hash.length() != 64) return false;
+
+    preferences.begin(WEB_AUTH_NAMESPACE, false);
+    size_t saltBytes = preferences.putString("salt", salt);
+    size_t hashBytes = preferences.putString("hash", hash);
+    preferences.end();
+    if (saltBytes == 0 || hashBytes == 0) return false;
+
+    webPasswordSalt = salt;
+    webPasswordHash = hash;
+    webSessionToken = randomHex(32);
+    return true;
+}
+
+bool verifyWebPassword(const String& password) {
+    if (!webPasswordConfigured() || password.length() > 64) return false;
+    return constantTimeEquals(hashWebPassword(password, webPasswordSalt), webPasswordHash);
+}
+
 void loadWiFiSettings() {
     preferences.begin(WIFI_CONFIG_NAMESPACE, true);
     wifiSsid = preferences.getString("ssid", DEFAULT_WIFI_SSID);
@@ -925,6 +1028,8 @@ String wifiConfigJson() {
     json += classicInquiryScanEnabled ? "true" : "false";
     json += ",\"classicPairedScanEnabled\":";
     json += classicPairedScanEnabled ? "true" : "false";
+    json += ",\"webPasswordEnabled\":";
+    json += webPasswordConfigured() ? "true" : "false";
     json += "}";
     return json;
 }
@@ -994,6 +1099,57 @@ void sendJson(WiFiClient& client, int code, const String& json) {
     sendResponse(client, code, "application/json; charset=utf-8", json);
 }
 
+void sendJsonWithCookie(WiFiClient& client, int code, const String& json, const String& cookie) {
+    client.print("HTTP/1.1 ");
+    client.print(code);
+    client.println(code == 200 ? " OK" : " Error");
+    client.println("Content-Type: application/json; charset=utf-8");
+    client.println("Cache-Control: no-store");
+    client.print("Set-Cookie: ");
+    client.println(cookie);
+    client.println("Connection: close");
+    client.println();
+    client.print(json);
+}
+
+String sessionCookieValue() {
+    return String(WEB_SESSION_COOKIE) + "=" + webSessionToken + "; Path=/; HttpOnly; SameSite=Strict";
+}
+
+bool hasValidWebSession(const String& cookieHeader) {
+    if (!webPasswordConfigured() || webSessionToken.length() != 64) return false;
+
+    int start = 0;
+    while (start < cookieHeader.length()) {
+        int end = cookieHeader.indexOf(';', start);
+        if (end < 0) end = cookieHeader.length();
+        String cookie = cookieHeader.substring(start, end);
+        cookie.trim();
+        String prefix = String(WEB_SESSION_COOKIE) + "=";
+        if (cookie.startsWith(prefix)) {
+            return constantTimeEquals(cookie.substring(prefix.length()), webSessionToken);
+        }
+        start = end + 1;
+    }
+    return false;
+}
+
+void handleAuthPage(WiFiClient& client) {
+    client.println("HTTP/1.1 200 OK");
+    client.println("Content-Type: text/html; charset=utf-8");
+    client.println("Cache-Control: no-store");
+    client.println("Connection: close");
+    client.println();
+    client.print(F(R"rawliteral(
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#0a1018"><title>BC250 Control Panel</title>
+<style>
+:root{color-scheme:dark;--blue:#4da3ff;--muted:#8291a5;--line:#263548}*{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;padding:20px;background:radial-gradient(circle at top,#16263a 0,#0a1018 48%);color:#edf3f9;font-family:Inter,system-ui,sans-serif}.card{width:min(100%,410px);padding:28px;border:1px solid var(--line);border-radius:16px;background:#101a27;box-shadow:0 22px 60px rgba(0,0,0,.38)}.mark{display:grid;place-items:center;width:46px;height:46px;margin-bottom:19px;border-radius:13px;background:#183657;color:var(--blue)}.mark svg{width:28px}h1{margin:0;font-size:1.35rem}p{margin:8px 0 22px;color:var(--muted);font-size:.84rem;line-height:1.55}label{display:block;margin:14px 0 7px;color:#bdc9d7;font-size:.78rem;font-weight:650}input{width:100%;min-height:44px;padding:10px 12px;border:1px solid #33465d;border-radius:10px;background:#0a121c;color:#f2f6fa;font:inherit}input:focus{outline:2px solid var(--blue);outline-offset:1px}button{width:100%;min-height:44px;margin-top:20px;border:0;border-radius:10px;background:#2588eb;color:white;font:700 .84rem inherit;cursor:pointer}button:disabled{opacity:.55;cursor:wait}.message{min-height:18px;margin-top:12px;color:#ff9e9e;font-size:.76rem}.hint{color:var(--muted);font-size:.72rem}</style></head><body><main class="card"><div class="mark" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M7.5 8h9a4 4 0 0 1 3.8 2.8l1.3 4.2a2.4 2.4 0 0 1-4.1 2.3l-1.7-1.8H8.2l-1.7 1.8A2.4 2.4 0 0 1 2.4 15l1.3-4.2A4 4 0 0 1 7.5 8Z"/><path d="M8 11v4M6 13h4M15.5 12.5h.01M18 14h.01"/></svg></div>
+)rawliteral"));
+    client.print(F(R"rawliteral(<h1>Welcome back</h1><p>Enter the WebUI password to open the BC250 control panel.</p><form id="authForm"><label for="password">Password</label><input id="password" name="password" type="password" maxlength="64" autocomplete="current-password" required autofocus><button id="submit" type="submit">Sign in</button><div id="message" class="message" role="alert"></div></form><script>
+const form=document.getElementById('authForm'),password=document.getElementById('password'),message=document.getElementById('message'),button=document.getElementById('submit');form.addEventListener('submit',async event=>{event.preventDefault();message.textContent='';button.disabled=true;try{const body='password='+encodeURIComponent(password.value);const response=await fetch('/api/auth/login',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body,cache:'no-store'});await response.json();if(!response.ok){message.textContent='Incorrect password.';password.select();return}location.replace('/')}catch(error){message.textContent='Could not contact the controller.'}finally{button.disabled=false}});
+</script></main></body></html>)rawliteral"));
+}
+
 String urlDecode(const String& value) {
     String decoded = "";
     for (unsigned int i = 0; i < value.length(); i++) {
@@ -1025,6 +1181,56 @@ String queryParam(const String& query, const String& key) {
         start = end + 1;
     }
     return "";
+}
+
+void handleAuthLogin(WiFiClient& client, const String& body) {
+    String password = queryParam(body, "password");
+    if (!verifyWebPassword(password)) {
+        addLog("WEB - Rejected WebUI sign-in attempt.");
+        sendJson(client, 401, "{\"ok\":false,\"error\":\"incorrect_password\"}");
+        return;
+    }
+
+    webSessionToken = randomHex(32);
+    addLog("WEB - WebUI sign-in successful.");
+    sendJsonWithCookie(client, 200, "{\"ok\":true}", sessionCookieValue());
+}
+
+void handleAuthLogout(WiFiClient& client) {
+    webSessionToken = randomHex(32);
+    sendJsonWithCookie(client, 200, "{\"ok\":true}", String(WEB_SESSION_COOKIE) + "=; Path=/; Max-Age=0; HttpOnly; SameSite=Strict");
+}
+
+void handleWebPasswordSave(WiFiClient& client, const String& body) {
+    String currentPassword = queryParam(body, "currentPassword");
+    String newPassword = queryParam(body, "newPassword");
+    bool removePassword = queryParam(body, "remove") == "1";
+
+    if (webPasswordConfigured() && !verifyWebPassword(currentPassword)) {
+        sendJson(client, 403, "{\"ok\":false,\"error\":\"incorrect_current_password\"}");
+        return;
+    }
+
+    if (removePassword) {
+        preferences.begin(WEB_AUTH_NAMESPACE, false);
+        preferences.remove("salt");
+        preferences.remove("hash");
+        preferences.end();
+        webPasswordSalt = "";
+        webPasswordHash = "";
+        webSessionToken = randomHex(32);
+        addLog("WEB - Password protection disabled.");
+        sendJsonWithCookie(client, 200, "{\"ok\":true,\"enabled\":false}", String(WEB_SESSION_COOKIE) + "=; Path=/; Max-Age=0; HttpOnly; SameSite=Strict");
+        return;
+    }
+
+    if (!saveWebPassword(newPassword)) {
+        sendJson(client, 400, "{\"ok\":false,\"error\":\"invalid_password\"}");
+        return;
+    }
+
+    addLog("WEB - Password protection enabled or updated.");
+    sendJsonWithCookie(client, 200, "{\"ok\":true,\"enabled\":true}", sessionCookieValue());
 }
 
 void handleWebRoot(WiFiClient& client) {
@@ -1164,6 +1370,7 @@ void handleWebRoot(WiFiClient& client) {
     .item:last-child { padding-bottom: 0; }
     .item-name { margin-bottom: 3px; font-size: .84rem; font-weight: 700; }
     .item-meta { color: var(--muted); font-size: .72rem; }
+    .item-actions { display: flex; gap: 7px; }
     code { color: #aec4dc; font-family: "SFMono-Regular", Consolas, monospace; font-size: .72rem; }
     .empty { padding: 18px; border: 1px dashed #2c3c50; border-radius: 11px; color: var(--muted); text-align: center; font-size: .78rem; }
     .scan-options { display: grid; gap: 8px; margin-bottom: 14px; padding: 12px; border: 1px solid #29384b; border-radius: 11px; background: #0c141e; }
@@ -1177,6 +1384,8 @@ void handleWebRoot(WiFiClient& client) {
     #wifiAddress { margin-top: 2px; font-size: .7rem; word-break: break-all; }
     .message { min-height: 18px; margin-top: 9px; color: var(--muted); font-size: .72rem; }
     .restart-row { display: flex; justify-content: space-between; gap: 12px; align-items: center; }
+    .password-actions { display: grid; grid-template-columns: 1fr auto; gap: 9px; margin-top: 15px; }
+    .password-actions button { width: 100%; }
     .log-panel { overflow: hidden; }
     .log-toolbar { padding: 14px 17px; border-bottom: 1px solid var(--line); display: flex; justify-content: space-between; align-items: center; }
     .terminal-dots { display: flex; gap: 5px; }
@@ -1184,6 +1393,7 @@ void handleWebRoot(WiFiClient& client) {
     pre { margin: 0; min-height: 160px; max-height: 290px; padding: 16px 17px; overflow: auto; white-space: pre-wrap; word-break: break-word; color: #a7b8ca; background: #090f17; font: .7rem/1.55 "SFMono-Regular", Consolas, monospace; }
     .toast { position: fixed; right: 20px; bottom: 20px; z-index: 10; max-width: min(360px, calc(100% - 40px)); padding: 11px 14px; border: 1px solid #355072; border-radius: 10px; background: #152335; color: #e9f2fc; box-shadow: 0 14px 40px rgba(0,0,0,.35); font-size: .78rem; opacity: 0; transform: translateY(10px); pointer-events: none; transition: .2s ease; }
     .toast.show { opacity: 1; transform: translateY(0); }
+    .header-actions { display: flex; align-items: center; gap: 9px; }
     @media (max-width: 860px) {
       .overview { grid-template-columns: 1fr 1fr; }
       .layout { grid-template-columns: 1fr; }
@@ -1211,7 +1421,7 @@ void handleWebRoot(WiFiClient& client) {
         <div class="brand-mark" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M7.5 8h9a4 4 0 0 1 3.8 2.8l1.3 4.2a2.4 2.4 0 0 1-4.1 2.3l-1.7-1.8H8.2l-1.7 1.8A2.4 2.4 0 0 1 2.4 15l1.3-4.2A4 4 0 0 1 7.5 8Z"/><path d="M8 11v4M6 13h4M15.5 12.5h.01M18 14h.01"/></svg></div>
         <div><h1>BC250 Control Panel</h1><div class="subtitle">ESP32 power &amp; controller management</div></div>
       </div>
-      <div class="live"><span id="liveDot" class="dot"></span><span id="liveText">Connecting</span></div>
+      <div class="header-actions"><div class="live"><span id="liveDot" class="dot"></span><span id="liveText">Connecting</span></div><button id="logoutBtn" class="secondary compact" onclick="logout()" hidden>Log out</button></div>
     </header>
 
     <section class="overview" aria-label="System overview">
@@ -1276,6 +1486,15 @@ void handleWebRoot(WiFiClient& client) {
           <button id="wifiSaveBtn" style="width:100%;margin-top:15px" onclick="saveWifi()">Save network settings</button>
           <div class="message" id="wifiMessage">Saving settings starts one connection attempt.</div>
           <div class="section-rule"></div>
+          <label class="field field-with-info" for="webPassword"><span>WebUI password</span><span class="info-tip" tabindex="0" aria-label="About the WebUI password"><span aria-hidden="true">i</span><span class="tooltip" role="tooltip">Optionally set a password to protect the WebUI.<br/>When enabled, the control panel and all API commands require sign-in.</span></span></label>
+          <div id="currentWebPasswordRow" hidden><label class="field" for="currentWebPassword">Current password</label><input id="currentWebPassword" type="password" maxlength="64" autocomplete="current-password"></div>
+          <label class="field" for="newWebPassword">New password</label>
+          <input id="newWebPassword" type="password" minlength="8" maxlength="64" autocomplete="new-password" placeholder="8 to 64 characters">
+          <label class="field" for="confirmWebPassword">Confirm new password</label>
+          <input id="confirmWebPassword" type="password" minlength="8" maxlength="64" autocomplete="new-password">
+          <div class="password-actions"><button id="webPasswordSaveBtn" onclick="saveWebPassword()">Enable password</button><button id="webPasswordRemoveBtn" class="danger" onclick="removeWebPassword()" hidden>Remove</button></div>
+          <div class="message" id="webPasswordMessage">Enabled control panel and API protection.</div>
+          <div class="section-rule"></div>
           <label class="field field-with-info" for="btSpoofMac"><span>Bluetooth spoof address</span><span class="info-tip" tabindex="0" aria-label="About the Bluetooth spoof address"><span aria-hidden="true">i</span><span class="tooltip" role="tooltip">Set the MAC address of the BC250 Bluetooth adapter that the gamepads are already paired with. While the PC is off, the ESP32 uses it to notice a paired gamepad trying to reconnect.<br/><br/>Leave this empty to disable spoofing.<br/>This is not required for BLE gamepads.<br/><br/>You can get the adapter MAC address with the <i>`bluetoothctl list`</i> command.<br/><br/>A restart is required after changing it.</span></span></label>
           <div class="field-row"><input id="btSpoofMac" type="text" maxlength="17" autocomplete="off" placeholder="Disabled when empty" aria-label="Bluetooth spoof address"><button id="btSpoofSaveBtn" class="secondary" onclick="saveBtSpoofMac()">Save</button></div>
           <div class="message" id="btSpoofMessage">Changes take effect after restarting the ESP32.</div>
@@ -1291,6 +1510,7 @@ void handleWebRoot(WiFiClient& client) {
 const byId = id => document.getElementById(id);
 async function api(path) {
   const response = await fetch(path, { cache: 'no-store' });
+  if (response.status === 401) { location.replace('/'); throw new Error('Authentication required'); }
   if (!response.ok) throw new Error(path + ' returned ' + response.status);
   return response.json();
 }
@@ -1298,6 +1518,7 @@ let refreshInFlight = false;
 let refreshQueued = false;
 let deviceConfigLoaded = false;
 let restarting = false;
+let webPasswordEnabled = false;
 let toastTimer;
 function notify(message) {
   const toast = byId('toast');
@@ -1305,6 +1526,9 @@ function notify(message) {
   toast.classList.add('show');
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => toast.classList.remove('show'), 2600);
+}
+async function logout() {
+  try { await fetch('/api/auth/logout', { method: 'POST', cache: 'no-store' }); } finally { location.replace('/'); }
 }
 function scheduleRefresh(delayMs = 0) { setTimeout(refresh, delayMs); }
 async function post(path, message) {
@@ -1376,6 +1600,51 @@ async function saveWifi() {
   message.textContent = result.connecting ? 'Saved. Trying the new network…' : 'Saved. Setup AP will remain active.';
   notify('Network settings saved');
   scheduleRefresh();
+}
+function applyWebPasswordState(enabled) {
+  webPasswordEnabled = enabled;
+  byId('currentWebPasswordRow').hidden = !enabled;
+  byId('webPasswordRemoveBtn').hidden = !enabled;
+  byId('logoutBtn').hidden = !enabled;
+  byId('webPasswordSaveBtn').textContent = enabled ? 'Change password' : 'Enable password';
+}
+async function saveWebPassword() {
+  const wasEnabled = webPasswordEnabled;
+  const currentPassword = byId('currentWebPassword').value;
+  const newPassword = byId('newWebPassword').value;
+  const confirmPassword = byId('confirmWebPassword').value;
+  const message = byId('webPasswordMessage');
+  if (newPassword.length < 8 || newPassword.length > 64) { message.textContent = 'New password must be 8 to 64 characters.'; return; }
+  if (newPassword !== confirmPassword) { message.textContent = 'New passwords do not match.'; return; }
+  message.textContent = webPasswordEnabled ? 'Changing password…' : 'Enabling password protection…';
+  const body = 'currentPassword=' + encodeURIComponent(currentPassword) + '&newPassword=' + encodeURIComponent(newPassword);
+  const response = await fetch('/api/auth/password', { method: 'POST', headers: {'Content-Type':'application/x-www-form-urlencoded'}, body, cache: 'no-store' });
+  const result = await response.json();
+  if (!response.ok) {
+    message.textContent = result.error === 'incorrect_current_password' ? 'Current password is incorrect.' : 'Could not save the password.';
+    return;
+  }
+  byId('currentWebPassword').value = '';
+  byId('newWebPassword').value = '';
+  byId('confirmWebPassword').value = '';
+  applyWebPasswordState(true);
+  message.textContent = 'Password protection is enabled.';
+  notify(wasEnabled ? 'WebUI password updated' : 'WebUI password enabled');
+}
+async function removeWebPassword() {
+  if (!confirm('Remove WebUI password protection? Anyone on the network will be able to use the control panel.')) return;
+  const message = byId('webPasswordMessage');
+  const currentPassword = byId('currentWebPassword').value;
+  const body = 'currentPassword=' + encodeURIComponent(currentPassword) + '&remove=1';
+  const response = await fetch('/api/auth/password', { method: 'POST', headers: {'Content-Type':'application/x-www-form-urlencoded'}, body, cache: 'no-store' });
+  const result = await response.json();
+  if (!response.ok) { message.textContent = result.error === 'incorrect_current_password' ? 'Enter the current password before removing protection.' : 'Could not remove the password.'; return; }
+  byId('currentWebPassword').value = '';
+  byId('newWebPassword').value = '';
+  byId('confirmWebPassword').value = '';
+  applyWebPasswordState(false);
+  message.textContent = 'Password protection is disabled.';
+  notify('WebUI password removed');
 }
 async function saveBtSpoofMac() {
   const input = byId('btSpoofMac');
@@ -1471,6 +1740,7 @@ async function refresh() {
       byId('scanBleEnabled').checked = wifiConfig.bleScanEnabled;
       byId('scanClassicInquiryEnabled').checked = wifiConfig.classicInquiryScanEnabled;
       byId('scanClassicPairedEnabled').checked = wifiConfig.classicPairedScanEnabled;
+      applyWebPasswordState(wifiConfig.webPasswordEnabled);
       deviceConfigLoaded = true;
     }
     const noScanMethods = !byId('scanBleEnabled').checked && !byId('scanClassicInquiryEnabled').checked && !byId('scanClassicPairedEnabled').checked;
@@ -1772,13 +2042,27 @@ void handleWebServer() {
     WiFiClient client = server.available();
     if (!client) return;
 
-    client.setTimeout(50);
+    client.setTimeout(100);
     String requestLine = client.readStringUntil('\r');
     client.readStringUntil('\n');
 
+    String cookieHeader = "";
+    String hostHeader = "";
+    String originHeader = "";
+    int contentLength = 0;
     while (client.connected()) {
         String header = client.readStringUntil('\n');
         if (header == "\r" || header.length() == 0) break;
+        int colon = header.indexOf(':');
+        if (colon > 0) {
+            String name = header.substring(0, colon);
+            String value = header.substring(colon + 1);
+            value.trim();
+            if (name.equalsIgnoreCase("Cookie")) cookieHeader = value;
+            if (name.equalsIgnoreCase("Host")) hostHeader = value;
+            if (name.equalsIgnoreCase("Origin")) originHeader = value;
+            if (name.equalsIgnoreCase("Content-Length")) contentLength = value.toInt();
+        }
     }
 
     int firstSpace = requestLine.indexOf(' ');
@@ -1797,8 +2081,46 @@ void handleWebServer() {
         target = target.substring(0, queryStart);
     }
 
+    if (contentLength < 0 || contentLength > 256) {
+        sendJson(client, 413, "{\"ok\":false,\"error\":\"request_too_large\"}");
+        delay(1);
+        client.stop();
+        return;
+    }
+
+    String body = "";
+    body.reserve(contentLength);
+    unsigned long bodyStartedAt = millis();
+    while ((int)body.length() < contentLength && millis() - bodyStartedAt < 500) {
+        while (client.available() && (int)body.length() < contentLength) {
+            body += static_cast<char>(client.read());
+        }
+        if ((int)body.length() < contentLength) delay(1);
+    }
+
+    // Browser requests that mutate state must come from this WebUI. Requests
+    // without an Origin header remain available to local API clients.
+    if (method == "POST" && originHeader.length() > 0 &&
+        (hostHeader.length() == 0 || originHeader != String("http://") + hostHeader)) {
+        sendJson(client, 403, "{\"ok\":false,\"error\":\"invalid_origin\"}");
+        delay(1);
+        client.stop();
+        return;
+    }
+
+    bool authenticated = hasValidWebSession(cookieHeader);
+    bool webAccessAllowed = !webPasswordConfigured() || authenticated;
     if (method == "GET" && target == "/") {
-        handleWebRoot(client);
+        if (webPasswordConfigured() && !authenticated) handleAuthPage(client);
+        else handleWebRoot(client);
+    } else if (method == "POST" && target == "/api/auth/login") {
+        handleAuthLogin(client, body);
+    } else if (!webAccessAllowed) {
+        sendJson(client, 401, "{\"ok\":false,\"error\":\"authentication_required\"}");
+    } else if (method == "POST" && target == "/api/auth/logout") {
+        handleAuthLogout(client);
+    } else if (method == "POST" && target == "/api/auth/password") {
+        handleWebPasswordSave(client, body);
     } else if (method == "GET" && target == "/api/status") {
         handleApiStatus(client);
     } else if (method == "GET" && target == "/api/controllers") {
@@ -1956,6 +2278,10 @@ void setup() {
     // must be selected before either stack starts using it.
     applyClassicBluetoothSpoof();
 
+    loadWebAuthSettings();
+    addLog(webPasswordConfigured()
+        ? "WEB - Password protection enabled."
+        : "WEB - Password protection disabled (optional in Settings).");
     loadWiFiSettings();
     setupWiFi();
 
