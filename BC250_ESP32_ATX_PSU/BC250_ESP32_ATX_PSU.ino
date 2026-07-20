@@ -1394,6 +1394,11 @@ void handleWebRoot(WiFiClient& client) {
     .toast { position: fixed; right: 20px; bottom: 20px; z-index: 10; max-width: min(360px, calc(100% - 40px)); padding: 11px 14px; border: 1px solid #355072; border-radius: 10px; background: #152335; color: #e9f2fc; box-shadow: 0 14px 40px rgba(0,0,0,.35); font-size: .78rem; opacity: 0; transform: translateY(10px); pointer-events: none; transition: .2s ease; }
     .toast.show { opacity: 1; transform: translateY(0); }
     .header-actions { display: flex; align-items: center; gap: 9px; }
+    footer { display: flex; justify-content: center; margin-top: 20px; }
+    footer a { display: inline-flex; align-items: center; gap: 7px; color: var(--muted); font-size: .74rem; text-decoration: none; transition: color .15s ease; }
+    footer a:hover { color: #dce8f5; }
+    footer a:focus-visible { outline: 2px solid var(--blue); outline-offset: 4px; border-radius: 3px; }
+    footer svg { width: 16px; height: 16px; fill: currentColor; }
     @media (max-width: 860px) {
       .overview { grid-template-columns: 1fr 1fr; }
       .layout { grid-template-columns: 1fr; }
@@ -1503,6 +1508,7 @@ void handleWebRoot(WiFiClient& client) {
         </section>
       </aside>
     </div>
+    <footer><a href="https://github.com/GreatApo/BC250_ESP32_ATX_PSU" target="_blank" rel="noopener noreferrer" aria-label="View BC250 ESP32 ATX PSU on GitHub"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 .7a11.5 11.5 0 0 0-3.6 22.4c.6.1.8-.3.8-.6v-2.2c-3.4.7-4.1-1.4-4.1-1.4-.6-1.4-1.4-1.8-1.4-1.8-1.1-.8.1-.8.1-.8 1.3.1 1.9 1.3 1.9 1.3 1.1 1.9 2.9 1.4 3.6 1.1.1-.8.4-1.4.8-1.7-2.7-.3-5.6-1.4-5.6-5.7 0-1.3.5-2.3 1.2-3.1-.1-.3-.5-1.6.1-3.1 0 0 1-.3 3.2 1.2a11 11 0 0 1 5.8 0C15.1 5.7 16 6 16 6c.6 1.6.2 2.8.1 3.1.8.8 1.2 1.8 1.2 3.1 0 4.4-2.9 5.4-5.6 5.7.4.4.8 1.1.8 2.2v3.3c0 .3.2.7.8.6A11.5 11.5 0 0 0 12 .7Z"/></svg>GreatApo/BC250_ESP32_ATX_PSU</a></footer>
   </main>
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
 
