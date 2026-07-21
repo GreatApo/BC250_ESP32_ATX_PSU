@@ -1362,6 +1362,11 @@ void handleWebRoot(WiFiClient& client) {
     .controller-add-row { grid-template-columns: minmax(150px, 1.2fr) minmax(120px, 1fr) auto; }
     label.field { display: block; margin: 13px 0 6px; color: #a6b4c5; font-size: .76rem; font-weight: 650; }
     label.field-with-info { display: flex; align-items: center; gap: 7px; }
+    .wifi-status-badge { margin-left: auto; }
+    .wifi-status-badge.connected { border-color: rgba(69, 212, 138, .35); background: rgba(69, 212, 138, .09); color: var(--green); }
+    .wifi-status-badge.ap { border-color: rgba(76, 145, 255, .35); background: rgba(76, 145, 255, .09); color: #7eaeff; }
+    .wifi-status-badge.pending { border-color: rgba(244, 184, 74, .35); background: rgba(244, 184, 74, .09); color: var(--amber); }
+    .wifi-status-badge.error { border-color: rgba(255, 100, 112, .35); background: rgba(255, 100, 112, .09); color: var(--red); }
     .info-tip {
       position: relative; display: inline-grid; place-items: center; width: 17px; height: 17px;
       border: 1px solid #52677f; border-radius: 50%; color: #b9c8d8; font-size: .68rem;
@@ -1421,10 +1426,6 @@ void handleWebRoot(WiFiClient& client) {
     .bluetooth-config .config-input-row { min-width: 280px; margin: 0; }
     .bluetooth-config .message { margin: 8px 11px 0; }
     button.config-action { min-width: 82px; min-height: 42px; padding: 9px 14px; }
-    .network-status { display: flex; gap: 11px; align-items: center; padding: 12px; border: 1px solid #29384b; border-radius: 11px; background: #0c141e; }
-    .network-status svg { width: 21px; color: var(--green); flex: 0 0 auto; }
-    #wifiState { font-size: .82rem; font-weight: 700; }
-    #wifiAddress { margin-top: 2px; font-size: .7rem; word-break: break-all; }
     .message { min-height: 18px; margin-top: 9px; color: var(--muted); font-size: .72rem; }
     .restart-row { display: flex; justify-content: space-between; gap: 12px; align-items: center; }
     .password-actions { display: grid; grid-template-columns: 1fr auto; gap: 9px; margin-top: 15px; }
@@ -1504,7 +1505,7 @@ void handleWebRoot(WiFiClient& client) {
         </section>
 
         <section class="card panel bluetooth-config">
-          <div class="panel-head"><div><div class="panel-title"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m7 7 10 10-5 5V2l5 5L7 17"/></svg><h2>Bluetooth config</h2></div><div class="eyebrow">Detection and Classic pairing options</div></div></div>
+          <div class="panel-head"><div><div class="panel-title"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m7 7 10 10-5 5V2l5 5L7 17"/></svg><h2>Bluetooth config</h2></div><div class="eyebrow">Detection and spoofing options</div></div></div>
           <div class="config-heading"><div class="config-heading-title"><span>Controller detection methods</span><span class="info-tip" tabindex="0" aria-label="About controller detection methods"><span aria-hidden="true">i</span><span class="tooltip" role="tooltip">These options control both controller discovery and background detection used to turn on the PC.<br/><br/><b>Bluetooth Low Energy (BLE) mode</b> listens for BLE advertisements.<br/><b>Bluetooth Classic (pairing mode)</b> runs Classic inquiries while controllers are discoverable.<br/><b>Bluetooth Classic (paired to the spoofed address)</b> listens for reconnect attempts from controllers paired with the configured spoof address.<br/><br/>Disabling unused methods can reduce radio contention and improve detection time. Changes are saved immediately.</span></span></div><small>Choose how the ESP32 discovers and monitors controllers</small></div>
           <div class="scan-options" aria-label="Controller detection methods">
             <label class="switch-row" for="scanBleEnabled"><span class="switch-copy"><strong>Bluetooth Low Energy (BLE)</strong></span><span class="switch-control"><input id="scanBleEnabled" type="checkbox" role="switch" checked onchange="saveScanOptions()"><span class="switch-track" aria-hidden="true"></span></span></label>
@@ -1526,9 +1527,7 @@ void handleWebRoot(WiFiClient& client) {
       <aside class="stack">
         <section class="card panel">
           <div class="panel-head"><div><div class="panel-title"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12.5a10 10 0 0 1 14 0M8.5 16a5 5 0 0 1 7 0M12 20h.01"/></svg><h2>ESP32 Settings</h2></div><div class="eyebrow">Network, access and device settings</div></div></div>
-          <div class="network-status"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12.5a10 10 0 0 1 14 0M8.5 16a5 5 0 0 1 7 0M12 20h.01"/></svg><div><div id="wifiState">Connecting…</div><div class="muted" id="wifiAddress"></div></div></div>
-          <div class="section-rule"></div>
-		      <label class="field field-with-info" for="wifiSsid"><span>2.4 GHz network name (SSID)</span><span class="info-tip" tabindex="0" aria-label="About wifi"><span aria-hidden="true">i</span><span class="tooltip" role="tooltip">Set the WiFi details to connect on the local network instead of setting up an Access Point (AP).<br>Leave SSID empty for AP.</span></span></label>
+          <label class="field field-with-info" for="wifiSsid"><span>2.4 GHz network name (SSID)</span><span class="info-tip" tabindex="0" aria-label="About wifi"><span aria-hidden="true">i</span><span class="tooltip" role="tooltip">Set the WiFi details to connect on the local network instead of setting up an Access Point (AP).<br>Leave SSID empty for AP.</span></span><span id="wifiStatusBadge" class="badge wifi-status-badge pending">Connecting</span></label>
           <input id="wifiSsid" type="text" maxlength="32" autocomplete="off" placeholder="Setup AP only when empty">
           <label class="field" for="wifiPassword">Network password</label>
           <input id="wifiPassword" type="password" maxlength="63" autocomplete="new-password" placeholder="Leave blank to keep saved password">
@@ -1800,8 +1799,17 @@ async function refresh() {
     byId('scanState').className = 'badge' + (status.scanning ? ' active' : '');
     byId('activitySummary').textContent = status.scanning ? 'Scanning' : (status.busy ? 'Power task' : 'Idle');
     byId('restartBtn').disabled = status.pcOn || status.busy;
-    byId('wifiState').textContent = formatState(status.wifi);
-    byId('wifiAddress').textContent = status.ip ? 'http://' + status.ip + '/' : 'No address assigned';
+    const wifiStatusBadge = byId('wifiStatusBadge');
+    if (status.lanIp) {
+      wifiStatusBadge.textContent = 'Connected';
+      wifiStatusBadge.className = 'badge wifi-status-badge connected';
+    } else if (!wifiConfig.ssid) {
+      wifiStatusBadge.textContent = 'Setup AP';
+      wifiStatusBadge.className = 'badge wifi-status-badge ap';
+    } else {
+      wifiStatusBadge.textContent = status.wifi === 'idle' ? 'Connecting' : formatState(status.wifi);
+      wifiStatusBadge.className = 'badge wifi-status-badge ' + (status.wifi === 'idle' ? 'pending' : 'error');
+    }
     byId('networkSummary').textContent = status.lanIp ? 'LAN' : 'AP';
     byId('networkIp').textContent = status.ip || 'No address';
     byId('controllerCount').textContent = paired.length;
