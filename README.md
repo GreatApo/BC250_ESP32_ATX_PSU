@@ -13,10 +13,12 @@ An ESP32-based power controller (with 2 relays) for a BC-250 motherboard running
 - Controls an ATX PSU and BC-250 motherboard on/off.
 - Powers on the BC-250 when a registered gamepad is detected over BLE or Bluetooth Classic.
 - Provides web-UI power control, live state, gamepad management, and a rolling event log.
+- Supports optional password protection for the WebUI and HTTP API.
 - Connects to a configured 2.4 GHz Wi-Fi network and falls back to its own setup access point if the connection fails.
 - Saves router Wi-Fi settings from the web portal and applies them after a guarded controller restart.
 - Discovers nearby gamepads from the built-in web-UI.
 - Supports manual MAC-address registration when a gamepad is not discoverable.
+- Supports persistent nicknames for registered controllers.
 - Supports web-UI Android & iOS shortcut icons.
 - Keeps the fallback AP active after a failed or dropped router connection; another router attempt is made only when settings are saved again or the ESP32 boots.
 - Supports Bluetooth MAC address spoofing for Bluetooth Classic gamepads that are already paired with the BC250.
@@ -94,7 +96,7 @@ Use the normally-open contacts of the relay controlled by `GPIO 17`:
 ### Physical button and LED
 
 - Connect a momentary button between `GPIO 19` and `GND`.
-- If you hav an external LED, Connect it to `GPIO 23` using the correct polarity and a current-limiting resistor.
+- If you have an external LED, connect it to `GPIO 23` using the correct polarity and a current-limiting resistor.
 
 ### PC-state monitor
 
@@ -122,7 +124,9 @@ const char* WIFI_AP_PASSWORD = "CHOOSE_AN_8_PLUS_CHARACTER_PASSWORD";
 - The portal never returns the saved password. A blank password field preserves it; select **Open network** to erase it deliberately.
 - The fallback AP name and password remain compile-time settings.
 
-The web server is plain HTTP and has no application-level login. Anyone who can reach it can operate the power controls and modify the controller list. Use it only on a trusted network and protect the fallback AP with a strong password.
+Change the example fallback-AP password before flashing, or replace it with another password of at least eight characters. The portal also supports an optional WebUI password under **ESP32 Settings**. When enabled, the control panel and API require sign-in; passwords must be 8–64 characters and active sessions expire after eight hours of inactivity.
+
+The server still uses plain HTTP rather than HTTPS, so credentials and commands are not encrypted in transit. Use it only on a trusted local network, choose strong AP and WebUI passwords, and do not expose port 80 to the internet.
 
 ### Pins and relay polarity
 
@@ -153,11 +157,16 @@ The main adjustable values are:
 
 If the ESP32 board has no onboard USB-to-serial interface, an Arduino Nano can be used as the programming adapter. See [Using an Arduino Nano as a USB-to-TTL adapter to program the ESP32](Arduino%20Nano%20as%20USB-to-TTL%20adapter%20to%20program%20ESP32.md) for the tested wiring, Arduino IDE procedure, bootloader-button sequence, and 3.3 V/5 V serial-level warning.
 
-Before proceeding, install the `arduino-littlefs-upload` plugin in Arduino IDE:
-1. Download the vsix file from [https://github.com/earlephilhower/arduino-littlefs-upload/releases/latest](https://github.com/earlephilhower/arduino-littlefs-upload/releases/latest)
-2. Copy it in `~/.arduinoIDE/plugins/` on Mac/Linux or `%userprofile%\.arduinoIDE\plugins\` on Windows
+The WebUI is stored separately in LittleFS, so both the sketch and the `BC250_ESP32_ATX_PSU/data` directory must be uploaded.
 
-Then the actual flash process:
+Before proceeding, install the [`arduino-littlefs-upload`](https://github.com/earlephilhower/arduino-littlefs-upload/releases/latest) plugin for Arduino IDE 2:
+
+1. Download the latest `.vsix` release.
+2. Copy it to `~/.arduinoIDE/plugins/` on macOS/Linux or `%USERPROFILE%\.arduinoIDE\plugins\` on Windows.
+3. Restart Arduino IDE.
+
+Then flash the project:
+
 1. Open `BC250_ESP32_ATX_PSU/BC250_ESP32_ATX_PSU.ino` in Arduino IDE
 2. Select `board` > `Select other board and port` > `ESP32 Dev Module` and click `yes` in the notification to install
 3. Select `Tools` > `Partition Scheme` > `No OTA (2MB APP/2MB SPIFFS)` (required due to the program size and WebUI filesystem)
@@ -172,6 +181,8 @@ Then the actual flash process:
 12. When you see `Connecting` in the log, on ESP32 hold the `IOO` button, press the `EN` button once and then release the `IOO` button
 13. The firmware and WebUI are now installed
 
+Re-upload the LittleFS data whenever a file under `BC250_ESP32_ATX_PSU/data` changes.
+
 ## First-time setup
 
 1. Power the ESP32 from a current-limited USB supply and test the button, LED, monitor input, and relay outputs without the PSU/motherboard control contacts attached.
@@ -181,11 +192,12 @@ Then the actual flash process:
 5. If router Wi-Fi fails after about 20 seconds, join the access point named by `WEB_HOSTNAME` (default: `bc250-controller`) and open `http://192.168.4.1/`.
 6. Enter the 2.4 GHz router SSID and password under **Wi-Fi & device**, then select **Save Wi-Fi**.
 7. While the PC state is off, select **Restart controller** to apply the saved settings. Reconnect through the new LAN address shown in Serial Monitor.
-8. Register a controller using the portal.
-9. Switch off and disconnect mains power, then wire the two relay contact pairs and PC monitor input.
-10. Recheck continuity, isolation, GPIO voltage, and relay idle states before reconnecting mains.
-11. Test web or physical-button power-on first, then test controller wake.
-12. Start a normal OS shutdown and confirm that `PS_ON` remains active until the monitor signal goes low.
+8. Under **ESP32 Settings**, enable a WebUI password and sign in again when prompted.
+9. Register a controller using the portal.
+10. Switch off and disconnect mains power, then wire the two relay contact pairs and PC monitor input.
+11. Recheck continuity, isolation, GPIO voltage, and relay idle states before reconnecting mains.
+12. Test web or physical-button power-on first, then test controller wake.
+13. Start a normal OS shutdown and confirm that `PS_ON` remains active until the monitor signal goes low.
 
 ### Recommended Bluetooth Classic setup
 
@@ -216,11 +228,13 @@ The portal provides:
 - Current PC state and internal power-operation state.
 - A round power button that changes between power-on and shutdown according to the current PC state.
 - The five saved-controller slots with removal controls.
+- Optional persistent nicknames for saved controllers.
 - A 15-second BLE/Bluetooth Classic scan for new devices.
 - Persistent toggles for BLE, pairing-mode Bluetooth Classic, and spoof-address reconnect detection; all three default to enabled.
 - Manual controller registration in `aa:bb:cc:dd:ee:ff` format.
 - A dedicated **Bluetooth config** section containing the detection-method switches and persistent Bluetooth adapter spoof-address configuration.
 - Persistent 2.4 GHz router SSID/password configuration.
+- Optional WebUI/API password protection with sign-in and sign-out controls.
 - A guarded ESP32 restart button, enabled only while the PC is off and the power state machine is idle.
 - The latest 40 in-memory log lines.
 
@@ -240,7 +254,7 @@ The discovered list shows each device's RSSI as a reference, but scan results ar
 
 ### Add a MAC address manually
 
-Enter a known Bluetooth MAC address in the portal using colon-separated hexadecimal notation. Manual registration is useful when a controller does not advertise long enough to appear in a scan.
+Enter a known Bluetooth MAC address in the portal using colon-separated hexadecimal notation. You can assign an optional nickname while adding it and rename a saved controller later. Manual registration is useful when a controller does not advertise long enough to appear in a scan.
 
 Controller addresses are stored in the ESP32 `Preferences` namespace `xbox_cfg` and survive power loss and firmware restarts. Adding a sixth unique controller replaces a slot using the sketch's rotating slot pointer. Controllers can be removed individually from the web page; there is currently no physical-button pairing or factory-reset gesture.
 
@@ -264,7 +278,9 @@ The sketch performs two short LED blinks when accepting a short press or the lon
 
 ## HTTP API
 
-The web UI uses a small unauthenticated HTTP API. It can also be called by trusted local automation:
+The WebUI uses a small form-encoded HTTP API. It can also be called by trusted local automation. `POST` fields belong in an `application/x-www-form-urlencoded` request body, not the URL query string.
+
+When WebUI password protection is enabled, first call `/api/auth/login` and retain the returned `bc250_session` cookie. All other API routes require that cookie. Sessions expire after eight hours of inactivity, and repeated failed sign-ins trigger an increasing delay.
 
 | Method | Path | Purpose |
 | --- | --- | --- |
@@ -272,22 +288,29 @@ The web UI uses a small unauthenticated HTTP API. It can also be called by trust
 | `GET` | `/api/controllers` | Saved controller list |
 | `GET` | `/api/found` | Current discovery results |
 | `GET` | `/api/logs` | Rolling runtime log |
+| `GET` | `/api/wifi` | Saved network, Bluetooth, scan, and WebUI-password status (never returns saved passwords) |
+| `POST` | `/api/auth/login` | Sign in with `password`; this is the only API route available without a valid session when protection is enabled |
+| `POST` | `/api/auth/logout` | Invalidate the current session |
+| `POST` | `/api/auth/password` | Enable or change protection with `currentPassword` and `newPassword`, or disable it with `currentPassword` and `remove=1` |
 | `POST` | `/api/power/on` | Request power-on |
 | `POST` | `/api/power/off` | Request normal shutdown |
 | `POST` | `/api/scan/start` | Start controller discovery |
-| `POST` | `/api/scan/options?ble=1&inquiry=1&paired=1` | Enable or disable the three persisted controller-detection methods |
-| `POST` | `/api/pair?mac=aa%3Abb%3Acc%3Add%3Aee%3Aff` | Save a controller from current results |
-| `POST` | `/api/manual-add?mac=aa%3Abb%3Acc%3Add%3Aee%3Aff` | Save a controller manually |
-| `POST` | `/api/remove?slot=0` | Remove a saved slot; slots are zero-based |
-| `POST` | `/api/wifi/save?ssid=NAME&password=SECRET&clearPassword=0` | Save router Wi-Fi settings and make one connection attempt; blank password preserves the current one |
+| `POST` | `/api/scan/options` | Set `ble`, `inquiry`, and `paired` to `0` or `1` |
+| `POST` | `/api/pair` | Save `mac` from the current discovery results |
+| `POST` | `/api/manual-add` | Save `mac` manually with optional `name` |
+| `POST` | `/api/nickname` | Set the optional `name` for zero-based `slot` |
+| `POST` | `/api/remove` | Remove a zero-based `slot` |
+| `POST` | `/api/wifi/save` | Save `ssid`, `password`, and `clearPassword`; a blank password preserves the current one unless `clearPassword=1` |
+| `POST` | `/api/bluetooth/save` | Save the BC250 Bluetooth adapter spoof address as `mac`; a blank value disables spoofing after restart |
 | `POST` | `/api/restart` | Restart the ESP32; rejected while the PC is on or power control is busy |
 
-There is no authentication, TLS, CSRF protection, or network access control in the firmware. Do not expose port 80 to the internet.
+The server rejects unknown host names, cross-origin `POST` requests, oversized requests, and malformed headers. These checks and optional authentication reduce accidental or cross-site access, but they do not provide TLS or replace network isolation. Do not expose port 80 to the internet.
 
 ## Troubleshooting
 
 ### The web page is unavailable
 
+- If the device responds with `WebUI filesystem is not available` or `Asset not found`, upload the `BC250_ESP32_ATX_PSU/data` directory to LittleFS using the same partition scheme used for the sketch.
 - Confirm the configured network is 2.4 GHz and the SSID/password are correct.
 - After the 20-second connection timeout, join the fallback AP and browse to `192.168.4.1`.
 - Ensure the client is on the same LAN and that client/AP isolation is disabled.
