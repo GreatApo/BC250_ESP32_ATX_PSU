@@ -66,7 +66,6 @@ const unsigned long WIFI_CONNECT_TIMEOUT_MS = 20000;    // Try station WiFi this
 const unsigned long BLE_SCAN_INTERVAL_MS = 2500;        // Leave WiFi airtime between blocking BLE scans
 const unsigned long CLASSIC_SCAN_INTERVAL_MS = 10000;   // Bluetooth Classic inquiry is longer and heavier than BLE scan
 const uint8_t CLASSIC_INQUIRY_DURATION = 4;             // Inquiry duration in 1.28s units (4 = about 5.1s)
-const int DEFAULT_WEB_SCAN_RSSI_THRESHOLD = -55;        // Filter out weak BLE signals during web scans (-45 = close, -70 = room, -90 = wall)
 
 // ================= MEMORY FOR 5 GAMEPADS =================
 const char* CONFIG_NAMESPACE = "xbox_cfg";
@@ -89,7 +88,6 @@ int foundControllerCount = 0;
 Preferences preferences;
 bool webScanActive = false;
 BLEScan* bleScan = nullptr;
-int webScanRssiThreshold = DEFAULT_WEB_SCAN_RSSI_THRESHOLD;
 bool bleScanRunning = false;
 bool shutdownPress = false;
 
@@ -393,20 +391,6 @@ bool removeController(int slot) {
     return true;
 }
 
-int clampRssiThreshold(int threshold) {
-    if (threshold < -100) return -100;
-    if (threshold > -20) return -20;
-    return threshold;
-}
-
-void saveRssiThreshold(int threshold) {
-    webScanRssiThreshold = clampRssiThreshold(threshold);
-
-    preferences.begin(CONFIG_NAMESPACE, false);
-    preferences.putInt("rssi", webScanRssiThreshold);
-    preferences.end();
-}
-
 void clearFoundControllers() {
     foundControllerCount = 0;
 }
@@ -598,8 +582,6 @@ void handleClassicDevice(const String& deviceMAC, const String& deviceName, int 
     unsigned long now = millis();
 
     if (webScanActive) {
-        if (rssi != -127 && rssi < webScanRssiThreshold) return;
-
         String label = deviceName.length() > 0 ? deviceName : "Classic Bluetooth";
         rememberFoundController(deviceMAC, label, rssi);
         return;
@@ -736,8 +718,6 @@ class MyAdvertisedDeviceCallbacks: public BLEAdvertisedDeviceCallbacks {
 
         if (webScanActive) {
             int currentRSSI = advertisedDevice.getRSSI();
-            if (currentRSSI < webScanRssiThreshold) return;
-
             String deviceName = "";
             if (advertisedDevice.haveName()) {
                 deviceName = advertisedDevice.getName().c_str();
@@ -1357,7 +1337,8 @@ void handleWebRoot(WiFiClient& client) {
     .eyebrow { margin-top: 4px; color: var(--muted); font-size: .76rem; }
     .badge { padding: 5px 9px; border: 1px solid var(--line); border-radius: 999px; background: #0d1520; color: var(--muted); font-size: .7rem; font-weight: 700; white-space: nowrap; }
     .badge.active { border-color: rgba(69, 212, 138, .35); background: rgba(69, 212, 138, .09); color: var(--green); }
-    .power-controls { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+    .power-panel-head { align-items: center; margin-bottom: 0; }
+    .power-panel-head .panel-title { flex-wrap: wrap; }
     button {
       min-height: 42px; padding: 10px 15px; border: 1px solid transparent; border-radius: 10px;
       background: linear-gradient(180deg, var(--blue), var(--blue-2)); color: white; font-weight: 750; cursor: pointer;
@@ -1372,7 +1353,9 @@ void handleWebRoot(WiFiClient& client) {
     button.compact { min-height: 34px; padding: 7px 11px; font-size: .76rem; }
     .control-button { min-height: 74px; display: flex; align-items: center; justify-content: center; gap: 10px; }
     .control-button svg { width: 19px; }
-    .control-button.danger { background: linear-gradient(180deg, #c94855, #a93440); border-color: transparent; color: white; }
+    .power-toggle { flex: 0 0 auto; width: 58px; min-height: 58px; padding: 0; border-color: #367ac5; border-radius: 50%; background: linear-gradient(135deg, #226fcb, #174b85); box-shadow: 0 8px 24px rgba(25, 104, 190, .26); }
+    .power-toggle.online { border-color: rgba(255, 100, 112, .45); background: linear-gradient(135deg, #c94855, #922c37); box-shadow: 0 12px 30px rgba(201, 72, 85, .2); }
+    .power-toggle svg { width: 23px; }
     .section-rule { height: 1px; background: var(--line); margin: 18px 0; }
     .row { display: flex; gap: 9px; align-items: center; flex-wrap: wrap; }
     .field-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 9px; }
@@ -1410,11 +1393,34 @@ void handleWebRoot(WiFiClient& client) {
     .item-actions { display: flex; gap: 7px; }
     code { color: #aec4dc; font-family: "SFMono-Regular", Consolas, monospace; font-size: .72rem; }
     .empty { padding: 18px; border: 1px dashed #2c3c50; border-radius: 11px; color: var(--muted); text-align: center; font-size: .78rem; }
-    .scan-options { display: grid; gap: 8px; margin-bottom: 14px; padding: 12px; border: 1px solid #29384b; border-radius: 11px; background: #0c141e; }
+    .scan-options { display: grid; gap: 4px; }
     .scan-options .check-row { margin-top: 0; }
-    .scan-tools { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 13px; }
-    .rssi-tools { display: flex; gap: 8px; align-items: center; }
-    .rssi-tools label { color: var(--muted); font-size: .72rem; }
+    .switch-row { display: flex; align-items: center; justify-content: space-between; gap: 18px; min-height: 60px; padding: 10px 11px; border-radius: 9px; cursor: pointer; transition: background .15s ease; }
+    .switch-row:hover { background: #111d2a; }
+    .switch-copy { display: grid; gap: 3px; min-width: 0; }
+    .switch-copy strong { color: #d8e3ee; font-size: .8rem; }
+    .switch-control { position: relative; flex: 0 0 auto; }
+    .switch-control input { position: absolute; width: 1px; height: 1px; min-height: 0; margin: 0; opacity: 0; }
+    .switch-track { display: block; position: relative; width: 48px; height: 26px; border: 1px solid #415166; border-radius: 999px; background: #202c3a; transition: background .18s ease, border-color .18s ease, box-shadow .18s ease; }
+    .switch-track::after { content: ""; position: absolute; top: 3px; left: 3px; width: 18px; height: 18px; border-radius: 50%; background: #aab6c4; box-shadow: 0 2px 5px rgba(0,0,0,.35); transition: transform .18s ease, background .18s ease; }
+    .switch-control input:checked + .switch-track { border-color: #3c8de9; background: #246cb9; box-shadow: 0 0 0 3px rgba(59, 139, 230, .09); }
+    .switch-control input:checked + .switch-track::after { transform: translateX(22px); background: #fff; }
+    .switch-control input:focus-visible + .switch-track { outline: 2px solid var(--blue); outline-offset: 3px; }
+    .scan-panel-head { align-items: center; }
+    .scan-panel-head .panel-title { flex-wrap: wrap; }
+    .bluetooth-config .panel-head { margin-bottom: 16px; }
+    .bluetooth-config .section-rule { margin: 16px 0; }
+    .bluetooth-config .scan-options { margin: 0 11px; }
+    .bluetooth-config .switch-row { min-height: 36px; padding: 0px 2px 0px 14px; }
+    .bluetooth-config .switch-copy strong { color: #bdc9d6; font-weight: 500; }
+    .config-heading { display: grid; gap: 4px; margin-bottom: 8px; padding: 0 11px; }
+    .config-heading-title { display: flex; align-items: center; gap: 7px; color: #d8e3ee; font-size: .8rem; font-weight: 700; }
+    .config-heading small { color: var(--muted); font-size: .69rem; line-height: 1.4; }
+    .config-inline { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 16px; padding: 0 11px; }
+    .config-inline .config-heading { margin: 0; padding: 0; }
+    .bluetooth-config .config-input-row { min-width: 280px; margin: 0; }
+    .bluetooth-config .message { margin: 8px 11px 0; }
+    button.config-action { min-width: 82px; min-height: 42px; padding: 9px 14px; }
     .network-status { display: flex; gap: 11px; align-items: center; padding: 12px; border: 1px solid #29384b; border-radius: 11px; background: #0c141e; }
     .network-status svg { width: 21px; color: var(--green); flex: 0 0 auto; }
     #wifiState { font-size: .82rem; font-weight: 700; }
@@ -1440,6 +1446,11 @@ void handleWebRoot(WiFiClient& client) {
       .overview { grid-template-columns: 1fr 1fr; }
       .layout { grid-template-columns: 1fr; }
     }
+    @media (max-width: 680px) {
+      .config-inline { grid-template-columns: 1fr; align-items: start; }
+      .config-inline .config-heading { margin-bottom: 8px; }
+      .bluetooth-config .config-input-row { width: 100%; min-width: 0; }
+    }
     @media (max-width: 540px) {
       .shell { width: min(100% - 20px, 1180px); padding-top: 18px; }
       header { margin-bottom: 18px; }
@@ -1447,9 +1458,8 @@ void handleWebRoot(WiFiClient& client) {
       .metric { min-height: 98px; padding: 14px; }
       .metric-value { font-size: 1.08rem; }
       .panel { padding: 16px; }
-      .power-controls { grid-template-columns: 1fr; }
       .control-button { min-height: 54px; }
-      .scan-tools { align-items: flex-start; flex-direction: column; }
+      .power-toggle { width: 54px; min-height: 54px; }
       .field-row { grid-template-columns: 1fr; }
       .restart-row { align-items: flex-start; flex-direction: column; }
       .restart-row button { width: 100%; }
@@ -1476,11 +1486,7 @@ void handleWebRoot(WiFiClient& client) {
     <div class="layout">
       <div class="stack">
         <section class="card panel">
-          <div class="panel-head"><div><div class="panel-title"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v10M18.4 6.6a9 9 0 1 1-12.8 0"/></svg><h2>BC250 Power control</h2></div><div class="eyebrow">Operate the ATX PSU and BC250's power switch</div></div><span id="powerBadge" class="badge">Checking</span></div>
-          <div class="power-controls">
-            <button id="powerOnBtn" class="control-button" onclick="post('/api/power/on', 'Power-on command sent')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v10M18.4 6.6a9 9 0 1 1-12.8 0"/></svg>Power on</button>
-            <button id="powerOffBtn" class="control-button danger" onclick="powerOff()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v10M18.4 6.6a9 9 0 1 1-12.8 0"/></svg>Shut down</button>
-          </div>
+          <div class="panel-head power-panel-head"><div><div class="panel-title"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v10M18.4 6.6a9 9 0 1 1-12.8 0"/></svg><h2>BC250 Power control</h2><span id="powerBadge" class="badge">Checking</span></div><div class="eyebrow">Operate the ATX PSU and BC250's power switch</div></div><button id="powerToggleBtn" class="control-button power-toggle" onclick="togglePower()" aria-label="Power on BC250" title="Power on BC250"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 2v10M18.4 6.6a9 9 0 1 1-12.8 0"/></svg></button></div>
         </section>
 
         <section class="card panel">
@@ -1490,23 +1496,25 @@ void handleWebRoot(WiFiClient& client) {
           <label class="field" for="manualMac">Add by Bluetooth address</label>
           <div class="field-row controller-add-row"><input id="manualMac" aria-label="Controller Bluetooth address" placeholder="aa:bb:cc:dd:ee:ff" maxlength="17"><input id="manualNickname" aria-label="Controller nickname" placeholder="Nickname (optional)" maxlength="32"><button onclick="manualAdd()">Add controller</button></div>
           <div class="hint">Use the manual address if a controller does not appear in a nearby scan.</div>
-          <div class="section-rule"></div>
-          <label class="field field-with-info"><span>Controller detection methods</span><span class="info-tip" tabindex="0" aria-label="About controller detection methods"><span aria-hidden="true">i</span><span class="tooltip" role="tooltip">These options control both controller discovery and background detection used to turn on the PC.<br/><br/><b>Bluetooth Low Energy (BLE) mode</b> listens for BLE advertisements.<br/><b>Bluetooth Classic (pairing mode)</b> runs Classic inquiries while controllers are discoverable.<br/><b>Bluetooth Classic (paired to the spoofed address)</b> listens for reconnect attempts from controllers paired with the configured spoof address.<br/><br/>Disabling unused methods can reduce radio contention and improve detection time. Changes are saved immediately.</span></span></label>
-          <div class="scan-options" aria-label="Controller detection methods">
-            <label class="row check-row" for="scanBleEnabled"><input id="scanBleEnabled" type="checkbox" checked onchange="saveScanOptions()"><span>Bluetooth Low Energy (BLE) mode</span></label>
-            <label class="row check-row" for="scanClassicInquiryEnabled"><input id="scanClassicInquiryEnabled" type="checkbox" checked onchange="saveScanOptions()"><span>Bluetooth Classic (pairing mode)</span></label>
-            <label class="row check-row" for="scanClassicPairedEnabled"><input id="scanClassicPairedEnabled" type="checkbox" checked onchange="saveScanOptions()"><span>Bluetooth Classic (paired to the spoofed address)</span></label>
-            <div class="message" id="scanOptionsMessage">Changes are saved and applied immediately.</div>
-          </div>
         </section>
 
         <section class="card panel">
-          <div class="panel-head"><div><div class="panel-title"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg><h2>Discover controllers</h2></div><div class="eyebrow">Search for nearby BLE or Classic Bluetooth gamepads</div></div><span id="scanState" class="badge">Idle</span></div>
-          <div class="scan-tools">
-            <button id="scanBtn" onclick="post('/api/scan/start', 'Controller scan started')">Test scan</button>
-            <div class="rssi-tools field-with-info"><label class="field-with-info" for="rssiInput"><span>Signal filter</span><span class="info-tip" tabindex="0" aria-label="About the signal strength filter"><span aria-hidden="true">i</span><span class="tooltip" role="tooltip">A higher dBm value is stricter:<br/>-45 finds close devices,<br/>-70 covers a typical room.<br/><br/>Values should be negative.</span></span></label><input id="rssiInput" type="number" min="-100" max="-20" step="1" aria-label="RSSI threshold"><button id="rssiBtn" class="secondary compact" onclick="setRssi()">Apply</button></div>
-          </div>
+          <div class="panel-head scan-panel-head"><div><div class="panel-title"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg><h2>Discover controllers</h2><span id="scanState" class="badge">Idle</span></div><div class="eyebrow">Search for nearby BLE or Classic Bluetooth gamepads</div></div><button id="scanBtn" onclick="post('/api/scan/start', 'Controller scan started')">Scan</button></div>
           <div id="found"><div class="empty">Start a scan to find nearby controllers.</div></div>
+        </section>
+
+        <section class="card panel bluetooth-config">
+          <div class="panel-head"><div><div class="panel-title"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m7 7 10 10-5 5V2l5 5L7 17"/></svg><h2>Bluetooth config</h2></div><div class="eyebrow">Detection and Classic pairing options</div></div></div>
+          <div class="config-heading"><div class="config-heading-title"><span>Controller detection methods</span><span class="info-tip" tabindex="0" aria-label="About controller detection methods"><span aria-hidden="true">i</span><span class="tooltip" role="tooltip">These options control both controller discovery and background detection used to turn on the PC.<br/><br/><b>Bluetooth Low Energy (BLE) mode</b> listens for BLE advertisements.<br/><b>Bluetooth Classic (pairing mode)</b> runs Classic inquiries while controllers are discoverable.<br/><b>Bluetooth Classic (paired to the spoofed address)</b> listens for reconnect attempts from controllers paired with the configured spoof address.<br/><br/>Disabling unused methods can reduce radio contention and improve detection time. Changes are saved immediately.</span></span></div><small>Choose how the ESP32 discovers and monitors controllers</small></div>
+          <div class="scan-options" aria-label="Controller detection methods">
+            <label class="switch-row" for="scanBleEnabled"><span class="switch-copy"><strong>Bluetooth Low Energy (BLE)</strong></span><span class="switch-control"><input id="scanBleEnabled" type="checkbox" role="switch" checked onchange="saveScanOptions()"><span class="switch-track" aria-hidden="true"></span></span></label>
+            <label class="switch-row" for="scanClassicInquiryEnabled"><span class="switch-copy"><strong>Bluetooth Classic (pairing mode)</strong></span><span class="switch-control"><input id="scanClassicInquiryEnabled" type="checkbox" role="switch" checked onchange="saveScanOptions()"><span class="switch-track" aria-hidden="true"></span></span></label>
+            <label class="switch-row" for="scanClassicPairedEnabled"><span class="switch-copy"><strong>Bluetooth Classic (paired to spoofed address)</strong></span><span class="switch-control"><input id="scanClassicPairedEnabled" type="checkbox" role="switch" checked onchange="saveScanOptions()"><span class="switch-track" aria-hidden="true"></span></span></label>
+          </div>
+          <div class="message" id="scanOptionsMessage">Changes are saved and applied immediately.</div>
+          <div class="section-rule"></div>
+          <div class="config-inline"><div class="config-heading"><div class="config-heading-title"><span>Bluetooth spoof address</span><span class="info-tip" tabindex="0" aria-label="About the Bluetooth spoof address"><span aria-hidden="true">i</span><span class="tooltip" role="tooltip">Set the MAC address of the BC250 Bluetooth adapter that the gamepads are already paired with. While the PC is off, the ESP32 uses it to notice a paired gamepad trying to reconnect.<br/><br/>Leave this empty to disable spoofing.<br/>This is not required for BLE gamepads.<br/><br/>You can get the adapter MAC address with the <i>`bluetoothctl list`</i> command.<br/><br/>A restart is required after changing it.</span></span></div><small>Used only for controllers paired with a Classic Bluetooth adapter</small></div><div class="field-row config-input-row"><input id="btSpoofMac" type="text" maxlength="17" autocomplete="off" placeholder="Disabled when empty" aria-label="Bluetooth spoof address"><button id="btSpoofSaveBtn" class="secondary config-action" onclick="saveBtSpoofMac()">Save</button></div></div>
+          <div class="message" id="btSpoofMessage">Changes take effect after restarting the ESP32.</div>
         </section>
 
         <section class="card log-panel">
@@ -1517,10 +1525,10 @@ void handleWebRoot(WiFiClient& client) {
 
       <aside class="stack">
         <section class="card panel">
-          <div class="panel-head"><div><div class="panel-title"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12.5a10 10 0 0 1 14 0M8.5 16a5 5 0 0 1 7 0M12 20h.01"/></svg><h2>ESP32 Settings</h2></div><div class="eyebrow">Network and controller settings</div></div></div>
+          <div class="panel-head"><div><div class="panel-title"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12.5a10 10 0 0 1 14 0M8.5 16a5 5 0 0 1 7 0M12 20h.01"/></svg><h2>ESP32 Settings</h2></div><div class="eyebrow">Network, access and device settings</div></div></div>
           <div class="network-status"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12.5a10 10 0 0 1 14 0M8.5 16a5 5 0 0 1 7 0M12 20h.01"/></svg><div><div id="wifiState">Connecting…</div><div class="muted" id="wifiAddress"></div></div></div>
           <div class="section-rule"></div>
-		  <label class="field field-with-info" for="wifiSsid"><span>2.4 GHz network name (SSID)</span><span class="info-tip" tabindex="0" aria-label="About wifi"><span aria-hidden="true">i</span><span class="tooltip" role="tooltip">Set the WiFi details to connect on the local network instead of setting up an Access Point (AP).<br>Leave SSID empty for AP.</span></span></label>
+		      <label class="field field-with-info" for="wifiSsid"><span>2.4 GHz network name (SSID)</span><span class="info-tip" tabindex="0" aria-label="About wifi"><span aria-hidden="true">i</span><span class="tooltip" role="tooltip">Set the WiFi details to connect on the local network instead of setting up an Access Point (AP).<br>Leave SSID empty for AP.</span></span></label>
           <input id="wifiSsid" type="text" maxlength="32" autocomplete="off" placeholder="Setup AP only when empty">
           <label class="field" for="wifiPassword">Network password</label>
           <input id="wifiPassword" type="password" maxlength="63" autocomplete="new-password" placeholder="Leave blank to keep saved password">
@@ -1536,10 +1544,6 @@ void handleWebRoot(WiFiClient& client) {
           <input id="confirmWebPassword" type="password" minlength="8" maxlength="64" autocomplete="new-password">
           <div class="password-actions"><button id="webPasswordSaveBtn" onclick="saveWebPassword()">Enable password</button><button id="webPasswordRemoveBtn" class="danger" onclick="removeWebPassword()" hidden>Remove</button></div>
           <div class="message" id="webPasswordMessage">Enabled control panel and API protection.</div>
-          <div class="section-rule"></div>
-          <label class="field field-with-info" for="btSpoofMac"><span>Bluetooth spoof address</span><span class="info-tip" tabindex="0" aria-label="About the Bluetooth spoof address"><span aria-hidden="true">i</span><span class="tooltip" role="tooltip">Set the MAC address of the BC250 Bluetooth adapter that the gamepads are already paired with. While the PC is off, the ESP32 uses it to notice a paired gamepad trying to reconnect.<br/><br/>Leave this empty to disable spoofing.<br/>This is not required for BLE gamepads.<br/><br/>You can get the adapter MAC address with the <i>`bluetoothctl list`</i> command.<br/><br/>A restart is required after changing it.</span></span></label>
-          <div class="field-row"><input id="btSpoofMac" type="text" maxlength="17" autocomplete="off" placeholder="Disabled when empty" aria-label="Bluetooth spoof address"><button id="btSpoofSaveBtn" class="secondary" onclick="saveBtSpoofMac()">Save</button></div>
-          <div class="message" id="btSpoofMessage">Changes take effect after restarting the ESP32.</div>
           <div class="section-rule"></div>
           <div class="restart-row"><div><div style="font-size:.8rem;font-weight:700">Restart ESP32</div><div class="hint">Available only while the PC is off.</div></div><button id="restartBtn" class="danger compact" onclick="restartDevice()">Restart</button></div>
         </section>
@@ -1562,6 +1566,8 @@ let refreshQueued = false;
 let deviceConfigLoaded = false;
 let restarting = false;
 let webPasswordEnabled = false;
+let pcIsOn = false;
+let scanStarted = false;
 let toastTimer;
 function notify(message) {
   const toast = byId('toast');
@@ -1577,13 +1583,26 @@ function scheduleRefresh(delayMs = 0) { setTimeout(refresh, delayMs); }
 async function post(path, message) {
   try {
     const response = await fetch(path, { method: 'POST', cache: 'no-store' });
-    if (!response.ok) throw new Error('Request failed');
+    if (!response.ok) {
+      const result = await response.json().catch(() => ({}));
+      if (result.error === 'no_scan_methods') {
+        notify('Enable BLE or Bluetooth Classic (pairing mode) to scan. Spoof mode only listens for paired reconnects.');
+        scheduleRefresh();
+        return;
+      }
+      throw new Error('Request failed');
+    }
+    if (path === '/api/scan/start') scanStarted = true;
     if (message) notify(message);
   } catch (error) { notify('Command could not be sent'); }
   scheduleRefresh();
 }
 function powerOff() {
   if (confirm('Send a normal shutdown command to the PC?')) post('/api/power/off', 'Shutdown command sent');
+}
+function togglePower() {
+  if (pcIsOn) powerOff();
+  else post('/api/power/on', 'Power-on command sent');
 }
 async function manualAdd() {
   const mac = byId('manualMac').value.trim();
@@ -1593,18 +1612,11 @@ async function manualAdd() {
   else { notify(response.status === 409 ? 'Controller is already registered' : 'Enter a valid Bluetooth address'); }
   scheduleRefresh();
 }
-async function setRssi() {
-  const value = byId('rssiInput').value;
-  const response = await fetch('/api/rssi?value=' + encodeURIComponent(value), { method: 'POST', cache: 'no-store' });
-  notify(response.ok ? 'Signal strength filter updated' : 'Could not update signal strength filter');
-  scheduleRefresh();
-}
 async function saveScanOptions() {
   const ble = byId('scanBleEnabled').checked;
   const inquiry = byId('scanClassicInquiryEnabled').checked;
   const paired = byId('scanClassicPairedEnabled').checked;
   const message = byId('scanOptionsMessage');
-  if (!ble && !inquiry) byId('scanBtn').disabled = true;
   const path = '/api/scan/options?ble=' + (ble ? '1' : '0') + '&inquiry=' + (inquiry ? '1' : '0') + '&paired=' + (paired ? '1' : '0');
   message.textContent = 'Saving scan options…';
   try {
@@ -1770,19 +1782,23 @@ async function refresh() {
   refreshInFlight = true;
   try {
     if (restarting) return;
-    const [status, paired, found, logs, wifiConfig] = await Promise.all([api('/api/status'), api('/api/controllers'), api('/api/found'), api('/api/logs'), api('/api/wifi')]);
+    const foundRequest = scanStarted ? api('/api/found') : Promise.resolve([]);
+    const [status, paired, found, logs, wifiConfig] = await Promise.all([api('/api/status'), api('/api/controllers'), foundRequest, api('/api/logs'), api('/api/wifi')]);
     const pc = byId('pc');
     pc.textContent = status.pcOn ? 'ON' : 'OFF';
     pc.className = status.pcOn ? 'on' : 'off';
     byId('powerState').textContent = formatState(status.powerState);
     byId('powerBadge').textContent = status.busy ? 'Operation active' : (status.pcOn ? 'System online' : 'System offline');
     byId('powerBadge').className = 'badge' + (status.pcOn ? ' active' : '');
+    pcIsOn = status.pcOn;
+    const powerToggle = byId('powerToggleBtn');
+    powerToggle.className = 'control-button power-toggle' + (status.pcOn ? ' online' : '');
+    powerToggle.disabled = status.busy;
+    powerToggle.setAttribute('aria-label', status.pcOn ? 'Shut down BC250' : 'Power on BC250');
+    powerToggle.title = status.pcOn ? 'Shut down BC250' : 'Power on BC250';
     byId('scanState').textContent = status.scanning ? 'Scanning…' : 'Idle';
     byId('scanState').className = 'badge' + (status.scanning ? ' active' : '');
     byId('activitySummary').textContent = status.scanning ? 'Scanning' : (status.busy ? 'Power task' : 'Idle');
-    byId('powerOnBtn').disabled = status.pcOn || status.busy;
-    byId('powerOffBtn').disabled = !status.pcOn || status.busy;
-    byId('rssiBtn').disabled = status.scanning;
     byId('restartBtn').disabled = status.pcOn || status.busy;
     byId('wifiState').textContent = formatState(status.wifi);
     byId('wifiAddress').textContent = status.ip ? 'http://' + status.ip + '/' : 'No address assigned';
@@ -1793,8 +1809,6 @@ async function refresh() {
     byId('lastUpdate').textContent = 'Updated ' + new Date().toLocaleTimeString([], {hour:'2-digit', minute:'2-digit', second:'2-digit'});
     byId('liveText').textContent = 'Live';
     byId('liveDot').className = 'dot online';
-    const rssiInput = byId('rssiInput');
-    if (document.activeElement !== rssiInput) rssiInput.value = status.rssiThreshold;
     if (!deviceConfigLoaded) {
       byId('wifiSsid').value = wifiConfig.ssid;
       byId('wifiPassword').placeholder = wifiConfig.hasPassword ? 'Saved password (leave blank to keep)' : 'Leave blank for an open network';
@@ -1805,15 +1819,16 @@ async function refresh() {
       applyWebPasswordState(wifiConfig.webPasswordEnabled);
       deviceConfigLoaded = true;
     }
-    const noDiscoveryMethods = !byId('scanBleEnabled').checked && !byId('scanClassicInquiryEnabled').checked;
-    byId('scanBtn').disabled = status.scanning || noDiscoveryMethods;
+    const noScanMethods = !byId('scanBleEnabled').checked && !byId('scanClassicInquiryEnabled').checked && !byId('scanClassicPairedEnabled').checked;
+    byId('scanBtn').disabled = status.scanning || noScanMethods;
     const pairedBox = byId('paired');
     pairedBox.replaceChildren();
     if (!paired.length) pairedBox.appendChild(empty('No controllers registered yet.'));
     paired.forEach(c => pairedBox.appendChild(controllerRow(c, 'Remove', 'danger', () => post('/api/remove?slot=' + c.slot, 'Controller removed'), 'Rename', () => renameController(c))));
     const foundBox = byId('found');
     foundBox.replaceChildren();
-    if (!found.length) foundBox.appendChild(empty(status.scanning ? 'Listening for nearby controllers…' : 'Start a scan to find nearby controllers.'));
+    if (!scanStarted) foundBox.appendChild(empty('Start a scan to find nearby controllers.'));
+    else if (!found.length) foundBox.appendChild(empty(status.scanning ? 'Listening for nearby controllers…' : 'No controllers found in this scan.'));
     found.forEach(c => foundBox.appendChild(controllerRow(c, 'Pair', '', () => post('/api/pair?mac=' + encodeURIComponent(c.mac), 'Controller paired'))));
     const logBox = byId('log');
     logBox.textContent = logs.length ? logs.join('\n') : 'No log entries yet.';
@@ -1833,6 +1848,7 @@ scheduleRefresh();
 </script>
 </body>
 </html>
+
 )rawliteral";
 
     client.println("HTTP/1.1 200 OK");
@@ -1854,8 +1870,6 @@ void handleApiStatus(WiFiClient& client) {
     json += classicDiscoveryRunning ? "true" : "false";
     json += ",\"busy\":";
     json += powerState != POWER_IDLE ? "true" : "false";
-    json += ",\"rssiThreshold\":";
-    json += webScanRssiThreshold;
     json += ",\"ip\":\"";
     json += webIpAddress();
     json += "\",\"lanIp\":\"";
@@ -1891,19 +1905,6 @@ void handleApiStartScan(WiFiClient& client) {
     lastBleScanTime = webScanStartTime - BLE_SCAN_INTERVAL_MS;
     lastClassicScanTime = webScanStartTime - CLASSIC_SCAN_INTERVAL_MS;
     addLog("CONTROLLER - Web scan started.");
-    sendJson(client, 200, "{\"ok\":true}");
-}
-
-void handleApiRssi(WiFiClient& client, const String& query) {
-    String value = queryParam(query, "value");
-    if (value.length() == 0) {
-        sendJson(client, 400, "{\"ok\":false,\"error\":\"missing_value\"}");
-        return;
-    }
-
-    int threshold = value.toInt();
-    saveRssiThreshold(threshold);
-    addLog(String("CONTROLLER - Web scan RSSI threshold set to ") + String(webScanRssiThreshold) + " dBm");
     sendJson(client, 200, "{\"ok\":true}");
 }
 
@@ -2222,8 +2223,6 @@ void handleWebServer() {
         handleApiRemove(client, query);
     } else if (method == "POST" && target == "/api/scan/start") {
         handleApiStartScan(client);
-    } else if (method == "POST" && target == "/api/rssi") {
-        handleApiRssi(client, query);
     } else if (method == "POST" && target == "/api/pair") {
         handleApiPair(client, query);
     } else if (method == "POST" && target == "/api/manual-add") {
@@ -2336,9 +2335,6 @@ void setup() {
 
     preferences.begin(CONFIG_NAMESPACE, true);
     currentSlot = preferences.getInt("slot", 0);
-    webScanRssiThreshold = clampRssiThreshold(
-        preferences.getInt("rssi", DEFAULT_WEB_SCAN_RSSI_THRESHOLD)
-    );
     classicBtSpoofMac = normalizeMac(preferences.getString("bt_mac", ""));
     bleControllerScanEnabled = preferences.getBool("scan_ble", true);
     classicInquiryScanEnabled = preferences.getBool("scan_inquiry", true);

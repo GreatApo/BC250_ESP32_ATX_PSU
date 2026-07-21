@@ -11,8 +11,8 @@ An ESP32-based power controller (with 2 relays) for a BC-250 motherboard running
 
 - Provides physical-button power-on and normal-shutdown controls.
 - Controls an ATX PSU and BC-250 motherboard on/off.
-- Power on the BC-250 when a registered gamepads is detected over BLE or Bluetooth Classic.
-- Provides web-UI power controls, live state, gamepads management, RSSI filtering, and a rolling event log.
+- Powers on the BC-250 when a registered gamepad is detected over BLE or Bluetooth Classic.
+- Provides web-UI power control, live state, gamepad management, and a rolling event log.
 - Connects to a configured 2.4 GHz Wi-Fi network and falls back to its own setup access point if the connection fails.
 - Saves router Wi-Fi settings from the web portal and applies them after a guarded controller restart.
 - Discovers nearby gamepads from the built-in web-UI.
@@ -102,7 +102,7 @@ Use the normally-open contacts of the relay controlled by `GPIO 17`:
 
 ## Configure the sketch
 
-Open [`BC250_ESP32_ATX_PSU.ino`](BC250_ESP32_ATX_PSU.ino) and review the settings near the top before compiling.
+Open [`BC250_ESP32_ATX_PSU.ino`](BC250_ESP32_ATX_PSU/BC250_ESP32_ATX_PSU.ino) and review the settings near the top before compiling.
 
 ### Wi-Fi and web portal
 
@@ -148,13 +148,12 @@ The main adjustable values are:
 | `PSU_SETTLE_BEFORE_PWR_SW_MS` | 1 s | Delay between `PS_ON` and motherboard button pulse |
 | `POWER_BUTTON_PRESS_MS` | 500 ms | Motherboard button pulse length |
 | `STARTUP_CONFIRM_TIMEOUT_MS` | 15 s | Maximum time to detect a successful startup |
-| `DEFAULT_WEB_SCAN_RSSI_THRESHOLD` | -55 dBm | Initial proximity filter for discovery |
 
 ## Compile and upload
 
 If the ESP32 board has no onboard USB-to-serial interface, an Arduino Nano can be used as the programming adapter. See [Using an Arduino Nano as a USB-to-TTL adapter to program the ESP32](Arduino%20Nano%20as%20USB-to-TTL%20adapter%20to%20program%20ESP32.md) for the tested wiring, Arduino IDE procedure, bootloader-button sequence, and 3.3 V/5 V serial-level warning.
 
-1. Open `BC250_ESP32_ATX_PSU.ino` in Arduino IDE
+1. Open `BC250_ESP32_ATX_PSU/BC250_ESP32_ATX_PSU.ino` in Arduino IDE
 2. Select `board` > `Select other board and port` > `ESP32 Dev Module` and click `yes` in the notification to install
 3. Select `Tools` > `Partition Scheme` > `No OTA (2MP APP/2MP SPIFFS)` (required due to the bigger program size)
 3. Click the `verify` button (check icon) to test-compile the code
@@ -192,9 +191,9 @@ After pairing, find the Bluetooth adapter MAC address on the BC250:
 
   Use the MAC address reported for the BC250 Bluetooth adapter or Bluetooth network connection.
 
-In the ESP32 web interface, enter this address under **PC Bluetooth spoof address**, select **Save**, and restart the ESP32 while the BC250 is off. This is the BC250 adapter address, not the controller address. Each controller must still be added separately to the ESP32's **Registered controllers** list.
+In the ESP32 web interface, enter this address under **Bluetooth config** > **Bluetooth spoof address**, select **Save**, and restart the ESP32 while the BC250 is off. This is the BC250 adapter address, not the controller address. Each controller must still be added separately to the ESP32's **Registered controllers** list.
 
-When the BC250 is off, the ESP32 temporarily uses the saved adapter address for Bluetooth Classic. This lets it detect a registered controller attempting to reconnect to the BC250 even when that controller is not discoverable through a normal inquiry. Once the BC250 turns on, the ESP32 stops answering under the spoofed address so the real BC250 Bluetooth adapter can take over. Leaving **PC Bluetooth spoof address** empty disables this behavior.
+When the BC250 is off, the ESP32 temporarily uses the saved adapter address for Bluetooth Classic. This lets it detect a registered controller attempting to reconnect to the BC250 even when that controller is not discoverable through a normal inquiry. Once the BC250 turns on, the ESP32 stops answering under the spoofed address so the real BC250 Bluetooth adapter can take over. Leaving **Bluetooth spoof address** empty disables this behavior.
 
 ## Web interface
 
@@ -207,13 +206,12 @@ If router Wi-Fi is unavailable, join the fallback AP and open `http://bc250-cont
 The portal provides:
 
 - Current PC state and internal power-operation state.
-- **Power on** and **Power off** controls.
+- A round power button that changes between power-on and shutdown according to the current PC state.
 - The five saved-controller slots with removal controls.
 - A 15-second BLE/Bluetooth Classic scan for new devices.
 - Persistent toggles for BLE, pairing-mode Bluetooth Classic, and spoof-address reconnect detection; all three default to enabled.
-- Adjustable discovery RSSI threshold from -100 to -20 dBm.
 - Manual controller registration in `aa:bb:cc:dd:ee:ff` format.
-- Persistent PC Bluetooth adapter spoof-address configuration for paired Bluetooth Classic controllers.
+- A dedicated **Bluetooth config** section containing the detection-method switches and persistent Bluetooth adapter spoof-address configuration.
 - Persistent 2.4 GHz router SSID/password configuration.
 - A guarded ESP32 restart button, enabled only while the PC is off and the power state machine is idle.
 - The latest 40 in-memory log lines.
@@ -225,12 +223,12 @@ The page refreshes approximately every 1.5 seconds. Logs are held only in RAM an
 ### Scan and pair
 
 1. Put the controller into its Bluetooth pairing/discoverable mode and keep it close to the ESP32.
-2. Open the web portal and select **Scan**.
+2. Open the web portal and select **Scan** under **Discover controllers**.
 3. Wait for the controller to appear in the discovered list.
 4. Select **Pair** next to the correct MAC address.
 5. Shut the PC down, wait for the 60-second shutdown cooldown, and activate the controller.
 
-The RSSI filter reduces the chance of registering a neighbor's device. A less-negative value is stricter: `-45 dBm` generally means very close, `-70 dBm` may cover a room, and `-90 dBm` can include devices through walls. Actual readings vary by antenna, enclosure, and environment.
+The discovered list shows each device's RSSI as a reference, but scan results are not filtered by signal strength. Verify the controller name and MAC address before pairing it.
 
 ### Add a MAC address manually
 
@@ -273,7 +271,6 @@ The web UI uses a small unauthenticated HTTP API. It can also be called by trust
 | `POST` | `/api/pair?mac=aa%3Abb%3Acc%3Add%3Aee%3Aff` | Save a controller from current results |
 | `POST` | `/api/manual-add?mac=aa%3Abb%3Acc%3Add%3Aee%3Aff` | Save a controller manually |
 | `POST` | `/api/remove?slot=0` | Remove a saved slot; slots are zero-based |
-| `POST` | `/api/rssi?value=-55` | Save discovery RSSI threshold |
 | `POST` | `/api/wifi/save?ssid=NAME&password=SECRET&clearPassword=0` | Save router Wi-Fi settings and make one connection attempt; blank password preserves the current one |
 | `POST` | `/api/restart` | Restart the ESP32; rejected while the PC is on or power control is busy |
 
@@ -290,7 +287,7 @@ There is no authentication, TLS, CSRF protection, or network access control in t
 
 ### A controller is not found
 
-- Lower the RSSI threshold to a more negative value, such as `-70` or `-85 dBm`.
+- Confirm that the required detection method is enabled under **Bluetooth config**.
 - Wait for the full 15-second scan because BLE and Classic inquiries share the radio.
 - Read the controller MAC address elsewhere and add it manually.
 
