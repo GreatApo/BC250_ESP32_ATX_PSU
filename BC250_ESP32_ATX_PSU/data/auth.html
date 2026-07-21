@@ -1,0 +1,158 @@
+<!doctype html>
+<html lang="en">
+   <head>
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      <meta name="theme-color" content="#0a1018">
+      <title>BC250 Control Panel</title>
+      <style>
+         :root {
+         color-scheme: dark;
+         --blue: #4da3ff;
+         --muted: #8291a5;
+         --line: #263548
+         }
+         * {
+         box-sizing: border-box
+         }
+         body {
+         margin: 0;
+         min-height: 100vh;
+         display: grid;
+         place-items: center;
+         padding: 20px;
+         background: radial-gradient(circle at top, #16263a 0, #0a1018 48%);
+         color: #edf3f9;
+         font-family: Inter, system-ui, sans-serif
+         }
+         .card {
+         width: min(100%, 410px);
+         padding: 28px;
+         border: 1px solid var(--line);
+         border-radius: 16px;
+         background: #101a27;
+         box-shadow: 0 22px 60px rgba(0, 0, 0, .38)
+         }
+         .mark {
+         display: grid;
+         place-items: center;
+         width: 46px;
+         height: 46px;
+         margin-bottom: 19px;
+         border-radius: 13px;
+         background: #183657;
+         color: var(--blue)
+         }
+         .mark svg {
+         width: 28px
+         }
+         h1 {
+         margin: 0;
+         font-size: 1.35rem
+         }
+         p {
+         margin: 8px 0 22px;
+         color: var(--muted);
+         font-size: .84rem;
+         line-height: 1.55
+         }
+         label {
+         display: block;
+         margin: 14px 0 7px;
+         color: #bdc9d7;
+         font-size: .78rem;
+         font-weight: 650
+         }
+         input {
+         width: 100%;
+         min-height: 44px;
+         padding: 10px 12px;
+         border: 1px solid #33465d;
+         border-radius: 10px;
+         background: #0a121c;
+         color: #f2f6fa;
+         font: inherit
+         }
+         input:focus {
+         outline: 2px solid var(--blue);
+         outline-offset: 1px
+         }
+         button {
+         width: 100%;
+         min-height: 44px;
+         margin-top: 20px;
+         border: 0;
+         border-radius: 10px;
+         background: #2588eb;
+         color: white;
+         font: 700 .84rem inherit;
+         cursor: pointer
+         }
+         button:disabled {
+         opacity: .55;
+         cursor: wait
+         }
+         .message {
+         min-height: 18px;
+         margin-top: 12px;
+         color: #ff9e9e;
+         font-size: .76rem
+         }
+         .hint {
+         color: var(--muted);
+         font-size: .72rem
+         }
+      </style>
+   </head>
+   <body>
+      <main class="card">
+         <div class="mark" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+               <path d="M7.5 8h9a4 4 0 0 1 3.8 2.8l1.3 4.2a2.4 2.4 0 0 1-4.1 2.3l-1.7-1.8H8.2l-1.7 1.8A2.4 2.4 0 0 1 2.4 15l1.3-4.2A4 4 0 0 1 7.5 8Z"/>
+               <path d="M8 11v4M6 13h4M15.5 12.5h.01M18 14h.01"/>
+            </svg>
+         </div>
+         <h1>Welcome back</h1>
+         <p>Enter the WebUI password to open the BC250 control panel.</p>
+         <form id="authForm">
+            <label for="password">Password</label>
+            <input id="password" name="password" type="password" maxlength="64" autocomplete="current-password" required autofocus>
+            <button id="submit" type="submit">Sign in</button>
+            <div id="message" class="message" role="alert"></div>
+         </form>
+         <script>
+            const form = document.getElementById('authForm'),
+                password = document.getElementById('password'),
+                message = document.getElementById('message'),
+                button = document.getElementById('submit');
+            form.addEventListener('submit', async event => {
+                event.preventDefault();
+                message.textContent = '';
+                button.disabled = true;
+                try {
+                    const body = 'password=' + encodeURIComponent(password.value);
+                    const response = await fetch('/api/auth/login', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/x-www-form-urlencoded'
+                        },
+                        body,
+                        cache: 'no-store'
+                    });
+                    const result = await response.json();
+                    if (!response.ok) {
+                        message.textContent = result.error === 'rate_limited' ? 'Too many attempts. Wait a moment and try again.' : 'Incorrect password.';
+                        password.select();
+                        return
+                    }
+                    location.replace('/')
+                } catch (error) {
+                    message.textContent = 'Could not contact the controller.'
+                } finally {
+                    button.disabled = false
+                }
+            });
+        </script>
+      </main>
+   </body>
+</html>

@@ -1,0 +1,15 @@
+{
+  "name": "BC250 Control Panel",
+  "short_name": "BC250 CP",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0a1018",
+  "theme_color": "#0a1018",
+  "icons": [
+    {
+      "src": "/icon.png",
+      "sizes": "450x450",
+      "type": "image/png"
+    }
+  ]
+}

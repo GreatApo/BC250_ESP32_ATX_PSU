@@ -153,16 +153,24 @@ The main adjustable values are:
 
 If the ESP32 board has no onboard USB-to-serial interface, an Arduino Nano can be used as the programming adapter. See [Using an Arduino Nano as a USB-to-TTL adapter to program the ESP32](Arduino%20Nano%20as%20USB-to-TTL%20adapter%20to%20program%20ESP32.md) for the tested wiring, Arduino IDE procedure, bootloader-button sequence, and 3.3 V/5 V serial-level warning.
 
+Before proceeding, install the `arduino-littlefs-upload` plugin in Arduino IDE:
+1. Download the vsix file from [https://github.com/earlephilhower/arduino-littlefs-upload/releases/latest](https://github.com/earlephilhower/arduino-littlefs-upload/releases/latest)
+2. Copy it in `~/.arduinoIDE/plugins/` on Mac/Linux or `%userprofile%\.arduinoIDE\plugins\` on Windows
+
+Then the actual flash process:
 1. Open `BC250_ESP32_ATX_PSU/BC250_ESP32_ATX_PSU.ino` in Arduino IDE
 2. Select `board` > `Select other board and port` > `ESP32 Dev Module` and click `yes` in the notification to install
-3. Select `Tools` > `Partition Scheme` > `No OTA (2MP APP/2MP SPIFFS)` (required due to the bigger program size)
-3. Click the `verify` button (check icon) to test-compile the code
-4. Go to `Tools` > `Port` and see what ports are shown up
-5. Connect the ESP32 to your PC (i.e. ESP32 to the Arduino and then through USB)
-6. Go to `Tools` > `Port` and select the new port that appeared
-7. Click `upload` and wait for the compile to finish
-8. When you see `Connecting` in the log, on ESP32 hold the `IOO` button, press the `EN` button once and then release the `IOO` button
-9. It should start programming the ESP32
+3. Select `Tools` > `Partition Scheme` > `No OTA (2MB APP/2MB SPIFFS)` (required due to the program size and WebUI filesystem)
+4. Install an ESP32 LittleFS data-upload tool that supports Arduino IDE 2
+5. Click the `verify` button (check icon) to test-compile the code
+6. Go to `Tools` > `Port` and see what ports are shown up
+7. Connect the ESP32 to your PC (i.e. ESP32 to the Arduino and then through USB)
+8. Go to `Tools` > `Port` and select the new port that appeared
+9. Click `upload` and wait for the compile to finish
+10. When you see `Connecting` in the log, on ESP32 hold the `IOO` button, press the `EN` button once and then release the `IOO` button
+11. Hit CTRL + SHIFT + P and find the `Upload LittleFS to Pico/ESP8266/ESP32`
+12. When you see `Connecting` in the log, on ESP32 hold the `IOO` button, press the `EN` button once and then release the `IOO` button
+13. The firmware and WebUI are now installed
 
 ## First-time setup
 

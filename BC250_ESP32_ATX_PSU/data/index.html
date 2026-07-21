@@ -1,0 +1,1526 @@
+<!doctype html>
+<html lang="en">
+	 <head>
+			<meta charset="utf-8">
+			<meta name="viewport" content="width=device-width,initial-scale=1">
+			<meta name="theme-color" content="#0a1018">
+			<link rel="icon" type="image/png" href="/icon.png">
+			<!-- Web Manifest for installable shortcuts -->
+			<link rel="manifest" href="/manifest.webmanifest">
+			<!-- Native WebKit home-screen icon support -->
+			<link rel="apple-touch-icon" href="/icon.png">
+			<title>BC250 Control Panel</title>
+			<style>
+				:root {
+					color-scheme: dark;
+					font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+					background: #080d14;
+					color: #e8eef6;
+					--bg: #080d14;
+					--surface: #101823;
+					--surface-2: #151f2c;
+					--line: #243244;
+					--muted: #8695a8;
+					--blue: #4c91ff;
+					--blue-2: #2776ee;
+					--green: #45d48a;
+					--red: #ff6470;
+					--amber: #f4b84a;
+					--radius: 16px;
+				}
+
+				* {
+					box-sizing: border-box;
+				}
+
+				body {
+					margin: 0;
+					min-height: 100vh;
+					background:
+						radial-gradient(circle at 8% 0%, rgba(47, 119, 238, .15), transparent 30rem),
+						var(--bg);
+				}
+
+				button,
+				input {
+					font: inherit;
+				}
+
+				button {
+					-webkit-tap-highlight-color: transparent;
+				}
+
+				.shell {
+					width: min(1180px, calc(100% - 32px));
+					margin: 0 auto;
+					padding: 28px 0 44px;
+				}
+
+				header {
+					display: flex;
+					align-items: center;
+					justify-content: space-between;
+					gap: 20px;
+					margin-bottom: 24px;
+				}
+
+				.brand {
+					display: flex;
+					align-items: center;
+					gap: 13px;
+				}
+
+				.brand-mark {
+					display: grid;
+					place-items: center;
+					width: 44px;
+					height: 44px;
+					border: 1px solid #3169a9;
+					border-radius: 13px;
+					background: linear-gradient(145deg, #1c58a0, #163353);
+					color: #fff;
+					box-shadow: 0 10px 32px rgba(20, 88, 166, .25);
+				}
+
+				.brand-mark svg {
+					width: 24px;
+				}
+
+				h1 {
+					font-size: 1.1rem;
+					letter-spacing: .01em;
+					margin: 0 0 2px;
+				}
+
+				.subtitle,
+				.muted {
+					color: var(--muted);
+				}
+
+				.subtitle {
+					font-size: .79rem;
+				}
+
+				.live {
+					display: flex;
+					align-items: center;
+					gap: 8px;
+					font-size: .78rem;
+					color: var(--muted);
+				}
+
+				.dot {
+					width: 8px;
+					height: 8px;
+					border-radius: 50%;
+					background: var(--amber);
+					box-shadow: 0 0 0 4px rgba(244, 184, 74, .1);
+				}
+
+				.dot.online {
+					background: var(--green);
+					box-shadow: 0 0 0 4px rgba(69, 212, 138, .1);
+				}
+
+				.dot.offline {
+					background: var(--red);
+					box-shadow: 0 0 0 4px rgba(255, 100, 112, .1);
+				}
+
+				.overview {
+					display: grid;
+					grid-template-columns: 1.35fr repeat(3, 1fr);
+					gap: 12px;
+					margin-bottom: 12px;
+				}
+
+				.card {
+					border: 1px solid var(--line);
+					border-radius: var(--radius);
+					background: rgba(16, 24, 35, .94);
+					box-shadow: 0 14px 36px rgba(0, 0, 0, .16);
+				}
+
+				.metric {
+					min-height: 112px;
+					padding: 18px;
+					display: flex;
+					flex-direction: column;
+					justify-content: space-between;
+				}
+
+				.metric-label {
+					display: flex;
+					align-items: center;
+					gap: 8px;
+					color: var(--muted);
+					font-size: .72rem;
+					font-weight: 700;
+					letter-spacing: .09em;
+					text-transform: uppercase;
+				}
+
+				.metric-label svg {
+					width: 15px;
+					color: #9eb0c5;
+				}
+
+				.metric-value {
+					display: flex;
+					align-items: baseline;
+					gap: 8px;
+					font-size: 1.3rem;
+					font-weight: 750;
+				}
+
+				.metric-value small {
+					color: var(--muted);
+					font-size: .72rem;
+					font-weight: 500;
+					overflow: hidden;
+					text-overflow: ellipsis;
+					white-space: nowrap;
+				}
+
+				.power-metric {
+					background: linear-gradient(120deg, rgba(32, 64, 103, .72), rgba(16, 24, 35, .95));
+				}
+
+				#pc.on {
+					color: var(--green);
+				}
+
+				#pc.off {
+					color: #aeb9c6;
+				}
+
+				.layout {
+					display: grid;
+					grid-template-columns: minmax(0, 1.25fr) minmax(320px, .75fr);
+					gap: 12px;
+					align-items: start;
+				}
+
+				.stack {
+					display: grid;
+					gap: 12px;
+				}
+
+				.panel {
+					padding: 20px;
+				}
+
+				.panel-head {
+					display: flex;
+					justify-content: space-between;
+					align-items: flex-start;
+					gap: 16px;
+					margin-bottom: 18px;
+				}
+
+				.panel-title {
+					display: flex;
+					align-items: center;
+					gap: 9px;
+				}
+
+				.panel-title svg {
+					width: 18px;
+					color: var(--blue);
+				}
+
+				h2 {
+					margin: 0;
+					font-size: .93rem;
+					letter-spacing: .01em;
+				}
+
+				.eyebrow {
+					margin-top: 4px;
+					color: var(--muted);
+					font-size: .76rem;
+				}
+
+				.badge {
+					padding: 5px 9px;
+					border: 1px solid var(--line);
+					border-radius: 999px;
+					background: #0d1520;
+					color: var(--muted);
+					font-size: .7rem;
+					font-weight: 700;
+					white-space: nowrap;
+				}
+
+				.badge.active {
+					border-color: rgba(69, 212, 138, .35);
+					background: rgba(69, 212, 138, .09);
+					color: var(--green);
+				}
+
+				.power-panel-head {
+					align-items: center;
+					margin-bottom: 0;
+				}
+
+				.power-panel-head .panel-title {
+					flex-wrap: wrap;
+				}
+
+				button {
+					min-height: 42px;
+					padding: 10px 15px;
+					border: 1px solid transparent;
+					border-radius: 10px;
+					background: linear-gradient(180deg, var(--blue), var(--blue-2));
+					color: white;
+					font-weight: 750;
+					cursor: pointer;
+					transition: transform .15s ease, border-color .15s ease, filter .15s ease;
+				}
+
+				button:hover:not(:disabled) {
+					filter: brightness(1.09);
+					transform: translateY(-1px);
+				}
+
+				button:active:not(:disabled) {
+					transform: translateY(0);
+				}
+
+				button:focus-visible,
+				input:focus-visible {
+					outline: 2px solid var(--blue);
+					outline-offset: 2px;
+				}
+
+				button:disabled {
+					opacity: .42;
+					cursor: not-allowed;
+				}
+
+				button.secondary {
+					border-color: #34455a;
+					background: #1a2736;
+					color: #d8e2ee;
+				}
+
+				button.danger {
+					border-color: rgba(255, 100, 112, .34);
+					background: rgba(255, 100, 112, .1);
+					color: #ff8790;
+				}
+
+				button.compact {
+					min-height: 34px;
+					padding: 7px 11px;
+					font-size: .76rem;
+				}
+
+				.control-button {
+					min-height: 74px;
+					display: flex;
+					align-items: center;
+					justify-content: center;
+					gap: 10px;
+				}
+
+				.control-button svg {
+					width: 19px;
+				}
+
+				.power-toggle {
+					flex: 0 0 auto;
+					width: 58px;
+					min-height: 58px;
+					padding: 0;
+					border-color: #367ac5;
+					border-radius: 50%;
+					background: linear-gradient(135deg, #226fcb, #174b85);
+					box-shadow: 0 8px 24px rgba(25, 104, 190, .26);
+				}
+
+				.power-toggle.online {
+					border-color: rgba(255, 100, 112, .45);
+					background: linear-gradient(135deg, #c94855, #922c37);
+					box-shadow: 0 12px 30px rgba(201, 72, 85, .2);
+				}
+
+				.power-toggle svg {
+					width: 23px;
+				}
+
+				.section-rule {
+					height: 1px;
+					background: var(--line);
+					margin: 18px 0;
+				}
+
+				.row {
+					display: flex;
+					gap: 9px;
+					align-items: center;
+					flex-wrap: wrap;
+				}
+
+				.field-row {
+					display: grid;
+					grid-template-columns: minmax(0, 1fr) auto;
+					gap: 9px;
+				}
+
+				.controller-add-row {
+					grid-template-columns: minmax(150px, 1.2fr) minmax(120px, 1fr) auto;
+				}
+
+				label.field {
+					display: block;
+					margin: 13px 0 6px;
+					color: #a6b4c5;
+					font-size: .76rem;
+					font-weight: 650;
+				}
+
+				label.field-with-info {
+					display: flex;
+					align-items: center;
+					gap: 7px;
+				}
+
+				.wifi-status-badge {
+					margin-left: auto;
+				}
+
+				.wifi-status-badge.connected {
+					border-color: rgba(69, 212, 138, .35);
+					background: rgba(69, 212, 138, .09);
+					color: var(--green);
+				}
+
+				.wifi-status-badge.ap {
+					border-color: rgba(76, 145, 255, .35);
+					background: rgba(76, 145, 255, .09);
+					color: #7eaeff;
+				}
+
+				.wifi-status-badge.pending {
+					border-color: rgba(244, 184, 74, .35);
+					background: rgba(244, 184, 74, .09);
+					color: var(--amber);
+				}
+
+				.wifi-status-badge.error {
+					border-color: rgba(255, 100, 112, .35);
+					background: rgba(255, 100, 112, .09);
+					color: var(--red);
+				}
+
+				.info-tip {
+					position: relative;
+					display: inline-grid;
+					place-items: center;
+					width: 17px;
+					height: 17px;
+					border: 1px solid #52677f;
+					border-radius: 50%;
+					color: #b9c8d8;
+					font-size: .68rem;
+					font-weight: 800;
+					line-height: 1;
+					cursor: help;
+					outline: none;
+				}
+
+				.info-tip:focus-visible {
+					outline: 2px solid var(--blue);
+					outline-offset: 2px;
+				}
+
+				.tooltip {
+					position: absolute;
+					z-index: 20;
+					right: -8px;
+					bottom: calc(100% + 9px);
+					width: min(290px, calc(100vw - 48px));
+					padding: 10px 11px;
+					border: 1px solid #39506b;
+					border-radius: 9px;
+					background: #172435;
+					color: #dbe6f2;
+					box-shadow: 0 12px 32px rgba(0, 0, 0, .38);
+					font-size: .7rem;
+					font-weight: 500;
+					line-height: 1.45;
+					opacity: 0;
+					visibility: hidden;
+					pointer-events: none;
+					transform: translateY(4px);
+					transition: opacity .15s ease, transform .15s ease, visibility .15s;
+				}
+
+				.info-tip:hover .tooltip,
+				.info-tip:focus .tooltip {
+					opacity: 1;
+					visibility: visible;
+					transform: translateY(0);
+				}
+
+				input {
+					width: 100%;
+					min-height: 42px;
+					border: 1px solid #334358;
+					border-radius: 10px;
+					padding: 9px 12px;
+					background: #0b121b;
+					color: #edf3f9;
+				}
+
+				input::placeholder {
+					color: #5f7084;
+				}
+
+				input[type="number"] {
+					width: 92px;
+				}
+
+				input[type="checkbox"] {
+					width: 16px;
+					min-height: auto;
+					accent-color: var(--blue);
+				}
+
+				.check-row {
+					margin-top: 12px;
+					color: #b4c0ce;
+					font-size: .78rem;
+				}
+
+				.hint {
+					margin-top: 8px;
+					color: var(--muted);
+					font-size: .72rem;
+					line-height: 1.5;
+				}
+
+				.item {
+					display: flex;
+					justify-content: space-between;
+					gap: 12px;
+					align-items: center;
+					border-top: 1px solid #202d3c;
+					padding: 12px 0;
+				}
+
+				.item:first-child {
+					border-top: 0;
+					padding-top: 0;
+				}
+
+				.item:last-child {
+					padding-bottom: 0;
+				}
+
+				.item-name {
+					margin-bottom: 3px;
+					font-size: .84rem;
+					font-weight: 700;
+				}
+
+				.item-meta {
+					color: var(--muted);
+					font-size: .72rem;
+				}
+
+				.item-actions {
+					display: flex;
+					gap: 7px;
+				}
+
+				code {
+					color: #aec4dc;
+					font-family: "SFMono-Regular", Consolas, monospace;
+					font-size: .72rem;
+				}
+
+				.empty {
+					padding: 18px;
+					border: 1px dashed #2c3c50;
+					border-radius: 11px;
+					color: var(--muted);
+					text-align: center;
+					font-size: .78rem;
+				}
+
+				.scan-options {
+					display: grid;
+					gap: 4px;
+				}
+
+				.scan-options .check-row {
+					margin-top: 0;
+				}
+
+				.switch-row {
+					display: flex;
+					align-items: center;
+					justify-content: space-between;
+					gap: 18px;
+					min-height: 60px;
+					padding: 10px 11px;
+					border-radius: 9px;
+					cursor: pointer;
+					transition: background .15s ease;
+				}
+
+				.switch-row:hover {
+					background: #111d2a;
+				}
+
+				.switch-copy {
+					display: grid;
+					gap: 3px;
+					min-width: 0;
+				}
+
+				.switch-copy strong {
+					color: #d8e3ee;
+					font-size: .8rem;
+				}
+
+				.switch-control {
+					position: relative;
+					flex: 0 0 auto;
+				}
+
+				.switch-control input {
+					position: absolute;
+					width: 1px;
+					height: 1px;
+					min-height: 0;
+					margin: 0;
+					opacity: 0;
+				}
+
+				.switch-track {
+					display: block;
+					position: relative;
+					width: 48px;
+					height: 26px;
+					border: 1px solid #415166;
+					border-radius: 999px;
+					background: #202c3a;
+					transition: background .18s ease, border-color .18s ease, box-shadow .18s ease;
+				}
+
+				.switch-track::after {
+					content: "";
+					position: absolute;
+					top: 3px;
+					left: 3px;
+					width: 18px;
+					height: 18px;
+					border-radius: 50%;
+					background: #aab6c4;
+					box-shadow: 0 2px 5px rgba(0, 0, 0, .35);
+					transition: transform .18s ease, background .18s ease;
+				}
+
+				.switch-control input:checked+.switch-track {
+					border-color: #3c8de9;
+					background: #246cb9;
+					box-shadow: 0 0 0 3px rgba(59, 139, 230, .09);
+				}
+
+				.switch-control input:checked+.switch-track::after {
+					transform: translateX(22px);
+					background: #fff;
+				}
+
+				.switch-control input:focus-visible+.switch-track {
+					outline: 2px solid var(--blue);
+					outline-offset: 3px;
+				}
+
+				.scan-panel-head {
+					align-items: center;
+				}
+
+				.scan-panel-head .panel-title {
+					flex-wrap: wrap;
+				}
+
+				.bluetooth-config .panel-head {
+					margin-bottom: 16px;
+				}
+
+				.bluetooth-config .section-rule {
+					margin: 16px 0;
+				}
+
+				.bluetooth-config .scan-options {
+					margin: 0 11px;
+				}
+
+				.bluetooth-config .switch-row {
+					min-height: 36px;
+					padding: 0px 2px 0px 14px;
+				}
+
+				.bluetooth-config .switch-copy strong {
+					color: #bdc9d6;
+					font-weight: 500;
+				}
+
+				.config-heading {
+					display: grid;
+					gap: 4px;
+					margin-bottom: 8px;
+					padding: 0 11px;
+				}
+
+				.config-heading-title {
+					display: flex;
+					align-items: center;
+					gap: 7px;
+					color: #d8e3ee;
+					font-size: .8rem;
+					font-weight: 700;
+				}
+
+				.config-heading small {
+					color: var(--muted);
+					font-size: .69rem;
+					line-height: 1.4;
+				}
+
+				.config-inline {
+					display: grid;
+					grid-template-columns: minmax(0, 1fr) auto;
+					align-items: center;
+					gap: 16px;
+					padding: 0 11px;
+				}
+
+				.config-inline .config-heading {
+					margin: 0;
+					padding: 0;
+				}
+
+				.bluetooth-config .config-input-row {
+					min-width: 280px;
+					margin: 0;
+				}
+
+				.bluetooth-config .message {
+					margin: 8px 11px 0;
+				}
+
+				button.config-action {
+					min-width: 82px;
+					min-height: 42px;
+					padding: 9px 14px;
+				}
+
+				.message {
+					min-height: 18px;
+					margin-top: 9px;
+					color: var(--muted);
+					font-size: .72rem;
+				}
+
+				.restart-row {
+					display: flex;
+					justify-content: space-between;
+					gap: 12px;
+					align-items: center;
+				}
+
+				.password-actions {
+					display: grid;
+					grid-template-columns: 1fr auto;
+					gap: 9px;
+					margin-top: 15px;
+				}
+
+				.password-actions button {
+					width: 100%;
+				}
+
+				.log-panel {
+					overflow: hidden;
+				}
+
+				.log-toolbar {
+					padding: 14px 17px;
+					border-bottom: 1px solid var(--line);
+					display: flex;
+					justify-content: space-between;
+					align-items: center;
+				}
+
+				.terminal-dots {
+					display: flex;
+					gap: 5px;
+				}
+
+				.terminal-dots i {
+					width: 7px;
+					height: 7px;
+					border-radius: 50%;
+					background: #405064;
+				}
+
+				pre {
+					margin: 0;
+					min-height: 160px;
+					max-height: 290px;
+					padding: 16px 17px;
+					overflow: auto;
+					white-space: pre-wrap;
+					word-break: break-word;
+					color: #a7b8ca;
+					background: #090f17;
+					font: .7rem/1.55 "SFMono-Regular", Consolas, monospace;
+				}
+
+				.toast {
+					position: fixed;
+					right: 20px;
+					bottom: 20px;
+					z-index: 10;
+					max-width: min(360px, calc(100% - 40px));
+					padding: 11px 14px;
+					border: 1px solid #355072;
+					border-radius: 10px;
+					background: #152335;
+					color: #e9f2fc;
+					box-shadow: 0 14px 40px rgba(0, 0, 0, .35);
+					font-size: .78rem;
+					opacity: 0;
+					transform: translateY(10px);
+					pointer-events: none;
+					transition: .2s ease;
+				}
+
+				.toast.show {
+					opacity: 1;
+					transform: translateY(0);
+				}
+
+				.header-actions {
+					display: flex;
+					align-items: center;
+					gap: 9px;
+				}
+
+				footer {
+					display: flex;
+					justify-content: center;
+					margin-top: 20px;
+				}
+
+				footer a {
+					display: inline-flex;
+					align-items: center;
+					gap: 7px;
+					color: var(--muted);
+					font-size: .74rem;
+					text-decoration: none;
+					transition: color .15s ease;
+				}
+
+				footer a:hover {
+					color: #dce8f5;
+				}
+
+				footer a:focus-visible {
+					outline: 2px solid var(--blue);
+					outline-offset: 4px;
+					border-radius: 3px;
+				}
+
+				footer svg {
+					width: 16px;
+					height: 16px;
+					fill: currentColor;
+				}
+
+				@media (max-width: 860px) {
+					.overview {
+						grid-template-columns: 1fr 1fr;
+					}
+
+					.layout {
+						grid-template-columns: 1fr;
+					}
+				}
+
+				@media (max-width: 680px) {
+					.config-inline {
+						grid-template-columns: 1fr;
+						align-items: start;
+					}
+
+					.config-inline .config-heading {
+						margin-bottom: 8px;
+					}
+
+					.bluetooth-config .config-input-row {
+						width: 100%;
+						min-width: 0;
+					}
+				}
+
+				@media (max-width: 540px) {
+					.shell {
+						width: min(100% - 20px, 1180px);
+						padding-top: 18px;
+					}
+
+					header {
+						margin-bottom: 18px;
+					}
+
+					.overview {
+						gap: 9px;
+					}
+
+					.metric {
+						min-height: 98px;
+						padding: 14px;
+					}
+
+					.metric-value {
+						font-size: 1.08rem;
+					}
+
+					.panel {
+						padding: 16px;
+					}
+
+					.control-button {
+						min-height: 54px;
+					}
+
+					.power-toggle {
+						width: 54px;
+						min-height: 54px;
+					}
+
+					.field-row {
+						grid-template-columns: 1fr;
+					}
+
+					.restart-row {
+						align-items: flex-start;
+						flex-direction: column;
+					}
+
+					.restart-row button {
+						width: 100%;
+					}
+				}
+			</style>
+	 </head>
+	 <body>
+			<main class="shell">
+				 <header>
+						<div class="brand">
+							 <div class="brand-mark" aria-hidden="true">
+									<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+										 <path d="M7.5 8h9a4 4 0 0 1 3.8 2.8l1.3 4.2a2.4 2.4 0 0 1-4.1 2.3l-1.7-1.8H8.2l-1.7 1.8A2.4 2.4 0 0 1 2.4 15l1.3-4.2A4 4 0 0 1 7.5 8Z"/>
+										 <path d="M8 11v4M6 13h4M15.5 12.5h.01M18 14h.01"/>
+									</svg>
+							 </div>
+							 <div>
+									<h1>BC250 Control Panel</h1>
+									<div class="subtitle">ESP32 power &amp; controller management</div>
+							 </div>
+						</div>
+						<div class="header-actions">
+							 <div class="live"><span id="liveDot" class="dot"></span><span id="liveText">Connecting</span></div>
+							 <button id="logoutBtn" class="secondary compact" onclick="logout()" hidden>Log out</button>
+						</div>
+				 </header>
+				 <section class="overview" aria-label="System overview">
+						<div class="card metric power-metric">
+							 <div class="metric-label">
+									<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+										 <path d="M12 2v10M18.4 6.6a9 9 0 1 1-12.8 0"/>
+									</svg>
+									System power
+							 </div>
+							 <div class="metric-value"><span id="pc">...</span><small id="powerState">Waiting for controller</small></div>
+						</div>
+						<div class="card metric">
+							 <div class="metric-label">
+									<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+										 <path d="M6 9h12a4 4 0 0 1 3.8 5.2l-1 3a2 2 0 0 1-3.3.8l-2-2H8.5l-2 2a2 2 0 0 1-3.3-.8l-1-3A4 4 0 0 1 6 9Z"/>
+									</svg>
+									Controllers
+							 </div>
+							 <div class="metric-value"><span id="controllerCount">—</span><small>registered</small></div>
+						</div>
+						<div class="card metric">
+							 <div class="metric-label">
+									<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+										 <path d="M5 12.5a10 10 0 0 1 14 0M8.5 16a5 5 0 0 1 7 0M12 20h.01"/>
+									</svg>
+									Network
+							 </div>
+							 <div class="metric-value"><span id="networkSummary">—</span><small id="networkIp">No address</small></div>
+						</div>
+						<div class="card metric">
+							 <div class="metric-label">
+									<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+										 <path d="M4 12h3l2-6 4 12 2-6h5"/>
+									</svg>
+									Activity
+							 </div>
+							 <div class="metric-value"><span id="activitySummary">Idle</span><small id="lastUpdate">Not updated</small></div>
+						</div>
+				 </section>
+				 <div class="layout">
+						<div class="stack">
+							 <section class="card panel">
+									<div class="panel-head power-panel-head">
+										 <div>
+												<div class="panel-title">
+													 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+															<path d="M12 2v10M18.4 6.6a9 9 0 1 1-12.8 0"/>
+													 </svg>
+													 <h2>BC250 Power control</h2>
+													 <span id="powerBadge" class="badge">Checking</span>
+												</div>
+												<div class="eyebrow">Operate the ATX PSU and BC250's power switch</div>
+										 </div>
+										 <button id="powerToggleBtn" class="control-button power-toggle" onclick="togglePower(this)" aria-label="Power on BC250" title="Power on BC250">
+												<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+													 <path d="M12 2v10M18.4 6.6a9 9 0 1 1-12.8 0"/>
+												</svg>
+										 </button>
+									</div>
+							 </section>
+							 <section class="card panel">
+									<div class="panel-head">
+										 <div>
+												<div class="panel-title">
+													 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+															<path d="M6 9h12a4 4 0 0 1 3.8 5.2l-1 3a2 2 0 0 1-3.3.8l-2-2H8.5l-2 2a2 2 0 0 1-3.3-.8l-1-3A4 4 0 0 1 6 9Z"/>
+															<path d="M8 11v4M6 13h4"/>
+													 </svg>
+													 <h2>Registered controllers</h2>
+												</div>
+												<div class="eyebrow">Controllers allowed to trigger the system</div>
+										 </div>
+										 <span id="pairedBadge" class="badge">0 devices</span>
+									</div>
+									<div id="paired">
+										 <div class="empty">Loading controllers…</div>
+									</div>
+									<div class="section-rule"></div>
+									<label class="field" for="manualMac">Add by Bluetooth address</label>
+									<div class="field-row controller-add-row"><input id="manualMac" aria-label="Controller Bluetooth address" placeholder="aa:bb:cc:dd:ee:ff" maxlength="17"><input id="manualNickname" aria-label="Controller nickname" placeholder="Nickname (optional)" maxlength="32"><button onclick="manualAdd()">Add controller</button></div>
+									<div class="hint">Use the manual address if a controller does not appear in a nearby scan.</div>
+							 </section>
+							 <section class="card panel">
+									<div class="panel-head scan-panel-head">
+										 <div>
+												<div class="panel-title">
+													 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+															<circle cx="11" cy="11" r="7"/>
+															<path d="m20 20-4-4"/>
+													 </svg>
+													 <h2>Discover controllers</h2>
+													 <span id="scanState" class="badge">Idle</span>
+												</div>
+												<div class="eyebrow">Search for nearby BLE or Classic Bluetooth gamepads</div>
+										 </div>
+										 <button id="scanBtn" onclick="post('/api/scan/start', 'Controller scan started', null, this)">Scan</button>
+									</div>
+									<div id="found">
+										 <div class="empty">Start a scan to find nearby controllers.</div>
+									</div>
+							 </section>
+							 <section class="card panel bluetooth-config">
+									<div class="panel-head">
+										 <div>
+												<div class="panel-title">
+													 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+															<path d="m7 7 10 10-5 5V2l5 5L7 17"/>
+													 </svg>
+													 <h2>Bluetooth config</h2>
+												</div>
+												<div class="eyebrow">Detection and spoofing options</div>
+										 </div>
+									</div>
+									<div class="config-heading">
+										 <div class="config-heading-title"><span>Controller detection methods</span><span class="info-tip" tabindex="0" aria-label="About controller detection methods"><span aria-hidden="true">i</span><span class="tooltip" role="tooltip">These options control both controller discovery and background detection used to turn on the PC.<br/><br/><b>Bluetooth Low Energy (BLE) mode</b> listens for BLE advertisements.<br/><b>Bluetooth Classic (pairing mode)</b> runs Classic inquiries while controllers are discoverable.<br/><b>Bluetooth Classic (paired to the spoofed address)</b> listens for reconnect attempts from controllers paired with the configured spoof address.<br/><br/>Disabling unused methods can reduce radio contention and improve detection time. Changes are saved immediately.</span></span></div>
+										 <small>Choose how the ESP32 discovers and monitors controllers</small>
+									</div>
+									<div class="scan-options" aria-label="Controller detection methods">
+										 <label class="switch-row" for="scanBleEnabled"><span class="switch-copy"><strong>Bluetooth Low Energy (BLE)</strong></span><span class="switch-control"><input id="scanBleEnabled" type="checkbox" role="switch" checked onchange="saveScanOptions()"><span class="switch-track" aria-hidden="true"></span></span></label>
+										 <label class="switch-row" for="scanClassicInquiryEnabled"><span class="switch-copy"><strong>Bluetooth Classic (pairing mode)</strong></span><span class="switch-control"><input id="scanClassicInquiryEnabled" type="checkbox" role="switch" checked onchange="saveScanOptions()"><span class="switch-track" aria-hidden="true"></span></span></label>
+										 <label class="switch-row" for="scanClassicPairedEnabled"><span class="switch-copy"><strong>Bluetooth Classic (paired to spoofed address)</strong></span><span class="switch-control"><input id="scanClassicPairedEnabled" type="checkbox" role="switch" checked onchange="saveScanOptions()"><span class="switch-track" aria-hidden="true"></span></span></label>
+									</div>
+									<div class="message" id="scanOptionsMessage">Changes are saved and applied immediately.</div>
+									<div class="section-rule"></div>
+									<div class="config-inline">
+										 <div class="config-heading">
+												<div class="config-heading-title"><span>Bluetooth spoof address</span><span class="info-tip" tabindex="0" aria-label="About the Bluetooth spoof address"><span aria-hidden="true">i</span><span class="tooltip" role="tooltip">Set the MAC address of the BC250 Bluetooth adapter that the gamepads are already paired with. While the PC is off, the ESP32 uses it to notice a paired gamepad trying to reconnect.<br/><br/>Leave this empty to disable spoofing.<br/>This is not required for BLE gamepads.<br/><br/>You can get the adapter MAC address with the <i>`bluetoothctl list`</i> command.<br/><br/>A restart is required after changing it.</span></span></div>
+												<small>Used only for controllers paired with a Classic Bluetooth adapter</small>
+										 </div>
+										 <div class="field-row config-input-row"><input id="btSpoofMac" type="text" maxlength="17" autocomplete="off" placeholder="Disabled when empty" aria-label="Bluetooth spoof address"><button id="btSpoofSaveBtn" class="secondary config-action" onclick="saveBtSpoofMac()">Save</button></div>
+									</div>
+									<div class="message" id="btSpoofMessage">Changes take effect after restarting the ESP32.</div>
+							 </section>
+							 <section class="card log-panel">
+									<div class="log-toolbar">
+										 <div class="panel-title">
+												<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+													 <path d="m8 9 3 3-3 3M13 15h3"/>
+													 <rect x="3" y="4" width="18" height="16" rx="2"/>
+												</svg>
+												<h2>Event log</h2>
+										 </div>
+										 <div class="terminal-dots" aria-hidden="true"><i></i><i></i><i></i></div>
+									</div>
+									<pre id="log">Waiting for controller…</pre>
+							 </section>
+						</div>
+						<aside class="stack">
+							 <section class="card panel">
+									<div class="panel-head">
+										 <div>
+												<div class="panel-title">
+													 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+															<path d="M5 12.5a10 10 0 0 1 14 0M8.5 16a5 5 0 0 1 7 0M12 20h.01"/>
+													 </svg>
+													 <h2>ESP32 Settings</h2>
+												</div>
+												<div class="eyebrow">Network, access and device settings</div>
+										 </div>
+									</div>
+									<label class="field field-with-info" for="wifiSsid"><span>2.4 GHz network name (SSID)</span><span class="info-tip" tabindex="0" aria-label="About wifi"><span aria-hidden="true">i</span><span class="tooltip" role="tooltip">Set the WiFi details to connect on the local network instead of setting up an Access Point (AP).<br>Leave SSID empty for AP.</span></span><span id="wifiStatusBadge" class="badge wifi-status-badge pending">Connecting</span></label>
+									<input id="wifiSsid" type="text" maxlength="32" autocomplete="off" placeholder="Setup AP only when empty">
+									<label class="field" for="wifiPassword">Network password</label>
+									<input id="wifiPassword" type="password" maxlength="63" autocomplete="new-password" placeholder="Leave blank to keep saved password">
+									<label class="row check-row" for="wifiOpen"><input id="wifiOpen" type="checkbox" onchange="openNetworkChanged()"><span>Open network (clear saved password)</span></label>
+									<button id="wifiSaveBtn" style="width:100%;margin-top:15px" onclick="saveWifi()">Save network settings</button>
+									<div class="message" id="wifiMessage">Saving settings starts one connection attempt.</div>
+									<div class="section-rule"></div>
+									<label class="field field-with-info" for="webPassword"><span>WebUI password</span><span class="info-tip" tabindex="0" aria-label="About the WebUI password"><span aria-hidden="true">i</span><span class="tooltip" role="tooltip">Optionally set a password to protect the WebUI.<br/>When enabled, the control panel and all API commands require sign-in.</span></span></label>
+									<div id="currentWebPasswordRow" hidden><label class="field" for="currentWebPassword">Current password</label><input id="currentWebPassword" type="password" maxlength="64" autocomplete="current-password"></div>
+									<label class="field" for="newWebPassword">New password</label>
+									<input id="newWebPassword" type="password" minlength="8" maxlength="64" autocomplete="new-password" placeholder="8 to 64 characters">
+									<label class="field" for="confirmWebPassword">Confirm new password</label>
+									<input id="confirmWebPassword" type="password" minlength="8" maxlength="64" autocomplete="new-password">
+									<div class="password-actions"><button id="webPasswordSaveBtn" onclick="saveWebPassword()">Enable password</button><button id="webPasswordRemoveBtn" class="danger" onclick="removeWebPassword()" hidden>Remove</button></div>
+									<div class="message" id="webPasswordMessage">Enabled control panel and API protection.</div>
+									<div class="section-rule"></div>
+									<div class="restart-row">
+										 <div>
+												<div style="font-size:.8rem;font-weight:700">Restart ESP32</div>
+												<div class="hint">Available only while the PC is off.</div>
+										 </div>
+										 <button id="restartBtn" class="danger compact" onclick="restartDevice()">Restart</button>
+									</div>
+							 </section>
+						</aside>
+				 </div>
+				 <footer>
+						<a href="https://github.com/GreatApo/BC250_ESP32_ATX_PSU" target="_blank" rel="noopener noreferrer" aria-label="View BC250 ESP32 ATX PSU on GitHub">
+							 <svg viewBox="0 0 24 24" aria-hidden="true">
+									<path d="M12 .7a11.5 11.5 0 0 0-3.6 22.4c.6.1.8-.3.8-.6v-2.2c-3.4.7-4.1-1.4-4.1-1.4-.6-1.4-1.4-1.8-1.4-1.8-1.1-.8.1-.8.1-.8 1.3.1 1.9 1.3 1.9 1.3 1.1 1.9 2.9 1.4 3.6 1.1.1-.8.4-1.4.8-1.7-2.7-.3-5.6-1.4-5.6-5.7 0-1.3.5-2.3 1.2-3.1-.1-.3-.5-1.6.1-3.1 0 0 1-.3 3.2 1.2a11 11 0 0 1 5.8 0C15.1 5.7 16 6 16 6c.6 1.6.2 2.8.1 3.1.8.8 1.2 1.8 1.2 3.1 0 4.4-2.9 5.4-5.6 5.7.4.4.8 1.1.8 2.2v3.3c0 .3.2.7.8.6A11.5 11.5 0 0 0 12 .7Z"/>
+							 </svg>
+							 GreatApo/BC250_ESP32_ATX_PSU
+						</a>
+				 </footer>
+			</main>
+			<div id="toast" class="toast" role="status" aria-live="polite"></div>
+			<script>
+				 const byId = id => document.getElementById(id);
+				 async function requestJson(path, { method = 'GET', data = null, button = null } = {}) {
+					 const options = { method, cache: 'no-store' };
+					 if (data !== null) {
+						 options.headers = {'Content-Type':'application/x-www-form-urlencoded'};
+						 options.body = new URLSearchParams(data).toString();
+					 }
+					 if (button) button.disabled = true;
+					 try {
+						 let response;
+						 try { response = await fetch(path, options); }
+						 catch (cause) {
+							 const error = new Error('network_error');
+							 error.code = 'network_error';
+							 error.cause = cause;
+							 throw error;
+						 }
+						 if (response.status === 401) { location.replace('/'); throw new Error('Authentication required'); }
+						 const result = await response.json().catch(() => ({}));
+						 if (!response.ok) {
+							 const error = new Error(result.error || (path + ' returned ' + response.status));
+							 error.code = result.error || 'request_failed';
+							 error.status = response.status;
+							 throw error;
+						 }
+						 return result;
+					 } finally {
+						 if (button) button.disabled = false;
+					 }
+				 }
+				 const api = path => requestJson(path); //Can add date to avoid caching: `+ '?_=' + Date.now()`
+				 let refreshInFlight = false;
+				 let refreshQueued = false;
+				 let statusRefreshInFlight = false;
+				 let logRefreshInFlight = false;
+				 let lastLogUpdatedAt = null;
+				 let deviceConfigLoaded = false;
+				 let wifiSsidConfigured = false;
+				 let restarting = false;
+				 let webPasswordEnabled = false;
+				 let pcIsOn = false;
+				 let scanStarted = false;
+				 let scanWasActive = false;
+				 let toastTimer;
+				 function notify(message) {
+					 const toast = byId('toast');
+					 toast.textContent = message;
+					 toast.classList.add('show');
+					 clearTimeout(toastTimer);
+					 toastTimer = setTimeout(() => toast.classList.remove('show'), 2600);
+				 }
+				 async function logout() {
+					 try { await requestJson('/api/auth/logout', { method: 'POST' }); } finally { location.replace('/'); }
+				 }
+				 function scheduleRefresh(delayMs = 0) { setTimeout(refresh, delayMs); }
+				 function scanCanDiscover() {
+					 return byId('scanBleEnabled').checked || byId('scanClassicInquiryEnabled').checked;
+				 }
+				 async function post(path, message, data = null, button = null) {
+					 try {
+						 await requestJson(path, { method: 'POST', data, button });
+						 if (path === '/api/scan/start') scanStarted = true;
+						 if (message) notify(message);
+					 } catch (error) {
+							 if (error.code === 'no_scan_methods') {
+								 notify('Enable BLE or Bluetooth Classic (pairing mode) to scan. Spoof mode only listens for paired reconnects.');
+								 scheduleRefresh();
+								 return;
+							 }
+							 notify(error.code === 'power_operation_rejected' ? 'Power operation was rejected' : 'Command could not be sent');
+					 }
+					 if (path === '/api/power/on' || path === '/api/power/off') refreshStatus();
+					 else scheduleRefresh();
+				 }
+				 function powerOff(button) {
+					 if (confirm('Send a normal shutdown command to the PC?')) post('/api/power/off', 'Shutdown command sent', null, button);
+				 }
+				 function togglePower(button) {
+					 if (pcIsOn) powerOff(button);
+					 else post('/api/power/on', 'Power-on command sent', null, button);
+				 }
+				 async function manualAdd() {
+					 const mac = byId('manualMac').value.trim();
+					 const nickname = byId('manualNickname').value.trim();
+					 try {
+						 await requestJson('/api/manual-add', { method: 'POST', data: {mac, name:nickname} });
+						 byId('manualMac').value = '';
+						 byId('manualNickname').value = '';
+						 notify('Controller added');
+					 } catch (error) {
+						 notify(error.code === 'already_paired' ? 'Controller is already registered' : 'Enter a valid Bluetooth address');
+					 }
+					 scheduleRefresh();
+				 }
+				 async function saveScanOptions() {
+					 const ble = byId('scanBleEnabled').checked;
+					 const inquiry = byId('scanClassicInquiryEnabled').checked;
+					 const paired = byId('scanClassicPairedEnabled').checked;
+					 const message = byId('scanOptionsMessage');
+					 message.textContent = 'Saving scan options…';
+					 try {
+						 await requestJson('/api/scan/options', { method: 'POST', data: {ble:ble?'1':'0', inquiry:inquiry?'1':'0', paired:paired?'1':'0'} });
+						 message.textContent = 'Saved and applied immediately.';
+						 notify('Controller scan options updated');
+					 } catch (error) {
+						 deviceConfigLoaded = false;
+						 message.textContent = 'Could not save controller scan options.';
+						 notify('Could not update scan options');
+					 }
+					 scheduleRefresh();
+				 }
+				 function openNetworkChanged() {
+					 const password = byId('wifiPassword');
+					 const isOpen = byId('wifiOpen').checked;
+					 password.disabled = isOpen;
+					 if (isOpen) password.value = '';
+				 }
+				 async function saveWifi() {
+					 const ssid = byId('wifiSsid').value;
+					 const password = byId('wifiPassword').value;
+					 const clearPassword = byId('wifiOpen').checked;
+					 const message = byId('wifiMessage');
+					 message.textContent = 'Saving settings…';
+					 let result;
+					 try {
+						 result = await requestJson('/api/wifi/save', { method: 'POST', data: {ssid, password, clearPassword:clearPassword?'1':'0'}, button:byId('wifiSaveBtn') });
+					 } catch (error) {
+						 message.textContent = error.code === 'invalid_password' ? 'Password must be empty/open or 8 to 63 characters.' : 'Could not save Wi-Fi settings.';
+						 return;
+					 }
+					 byId('wifiPassword').value = '';
+					 byId('wifiOpen').checked = false;
+					 openNetworkChanged();
+					 deviceConfigLoaded = false;
+					 message.textContent = result.connecting ? 'Saved. Trying the new network…' : 'Saved. Setup AP will remain active.';
+					 notify('Network settings saved');
+					 scheduleRefresh();
+				 }
+				 function applyWebPasswordState(enabled) {
+					 webPasswordEnabled = enabled;
+					 byId('currentWebPasswordRow').hidden = !enabled;
+					 byId('webPasswordRemoveBtn').hidden = !enabled;
+					 byId('logoutBtn').hidden = !enabled;
+					 byId('webPasswordSaveBtn').textContent = enabled ? 'Change password' : 'Enable password';
+				 }
+				 async function saveWebPassword() {
+					 const wasEnabled = webPasswordEnabled;
+					 const currentPassword = byId('currentWebPassword').value;
+					 const newPassword = byId('newWebPassword').value;
+					 const confirmPassword = byId('confirmWebPassword').value;
+					 const message = byId('webPasswordMessage');
+					 if (newPassword.length < 8 || newPassword.length > 64) { message.textContent = 'New password must be 8 to 64 characters.'; return; }
+					 if (newPassword !== confirmPassword) { message.textContent = 'New passwords do not match.'; return; }
+					 message.textContent = webPasswordEnabled ? 'Changing password…' : 'Enabling password protection…';
+					 try {
+						 await requestJson('/api/auth/password', { method: 'POST', data: {currentPassword, newPassword}, button:byId('webPasswordSaveBtn') });
+					 } catch (error) {
+						 message.textContent = error.code === 'incorrect_current_password' ? 'Current password is incorrect.' : 'Could not save the password.';
+						 return;
+					 }
+					 byId('currentWebPassword').value = '';
+					 byId('newWebPassword').value = '';
+					 byId('confirmWebPassword').value = '';
+					 applyWebPasswordState(true);
+					 message.textContent = 'Password protection is enabled.';
+					 notify(wasEnabled ? 'WebUI password updated' : 'WebUI password enabled');
+				 }
+				 async function removeWebPassword() {
+					 if (!confirm('Remove WebUI password protection? Anyone on the network will be able to use the control panel.')) return;
+					 const message = byId('webPasswordMessage');
+					 const currentPassword = byId('currentWebPassword').value;
+					 try {
+						 await requestJson('/api/auth/password', { method: 'POST', data: {currentPassword, remove:'1'}, button:byId('webPasswordRemoveBtn') });
+					 } catch (error) {
+						 message.textContent = error.code === 'incorrect_current_password' ? 'Enter the current password before removing protection.' : 'Could not remove the password.';
+						 return;
+					 }
+					 byId('currentWebPassword').value = '';
+					 byId('newWebPassword').value = '';
+					 byId('confirmWebPassword').value = '';
+					 applyWebPasswordState(false);
+					 message.textContent = 'Password protection is disabled.';
+					 notify('WebUI password removed');
+				 }
+				 async function saveBtSpoofMac() {
+					 const input = byId('btSpoofMac');
+					 const message = byId('btSpoofMessage');
+					 const mac = input.value.trim();
+					 message.textContent = 'Saving setting…';
+					 let result;
+					 try {
+						 result = await requestJson('/api/bluetooth/save', { method: 'POST', data: {mac}, button:byId('btSpoofSaveBtn') });
+					 } catch (error) {
+						 message.textContent = 'Enter a valid unicast MAC address, or leave the field empty to disable spoofing.';
+						 return;
+					 }
+					 input.value = result.mac;
+					 message.textContent = result.mac ? 'Saved. Restart the ESP32 while the PC is off to apply it.' : 'Spoofing disabled. Restart the ESP32 to apply it.';
+					 notify(result.mac ? 'Bluetooth spoof address saved' : 'Bluetooth spoofing disabled');
+				 }
+				 async function restartDevice() {
+					 if (!confirm('Restart the ESP32 controller now?')) return;
+					 try {
+						 await requestJson('/api/restart', { method: 'POST', button:byId('restartBtn') });
+					 } catch (error) {
+						 byId('wifiMessage').textContent = 'Restart is allowed only while the PC is off and idle.';
+						 return;
+					 }
+					 restarting = true;
+					 byId('wifiMessage').textContent = 'Restarting… Reconnect if the Wi-Fi network changed.';
+					 byId('restartBtn').disabled = true;
+					 setTimeout(() => location.reload(), 6000);
+				 }
+				 function empty(text) {
+					 const div = document.createElement('div');
+					 div.className = 'empty';
+					 div.textContent = text;
+					 return div;
+				 }
+				 function controllerRow(controller, actionText, actionClass, action, secondaryActionText, secondaryAction) {
+					 const row = document.createElement('div');
+					 row.className = 'item';
+					 const label = document.createElement('div');
+					 if (controller.name !== undefined) {
+						 const name = document.createElement('div');
+						 name.className = 'item-name';
+						 name.textContent = controller.name || 'Unknown controller';
+						 label.appendChild(name);
+					 }
+					 const meta = document.createElement('div');
+					 meta.className = 'item-meta';
+					 const mac = document.createElement('code');
+					 mac.textContent = controller.mac;
+					 meta.appendChild(mac);
+					 if (controller.rssi !== undefined) meta.append('  ·  ' + controller.rssi + ' dBm');
+					 label.appendChild(meta);
+					 const actions = document.createElement('div');
+					 actions.className = 'item-actions';
+					 if (secondaryActionText) {
+						 const secondaryButton = document.createElement('button');
+						 secondaryButton.className = 'secondary compact';
+						 secondaryButton.textContent = secondaryActionText;
+						 secondaryButton.onclick = () => secondaryAction(secondaryButton);
+						 actions.appendChild(secondaryButton);
+					 }
+					 const button = document.createElement('button');
+					 button.className = (actionClass || 'secondary') + ' compact';
+					 button.textContent = actionText;
+					 button.onclick = () => action(button);
+					 actions.appendChild(button);
+					 row.append(label, actions);
+					 return row;
+				 }
+				 async function renameController(controller, button = null) {
+					 const nickname = prompt('Controller nickname (leave blank to remove):', controller.name || '');
+					 if (nickname === null) return;
+					 try {
+						 await requestJson('/api/nickname', { method: 'POST', data: {slot:controller.slot, name:nickname}, button });
+						 notify('Controller nickname saved');
+					 } catch (error) { notify('Could not save controller nickname'); }
+					 scheduleRefresh();
+				 }
+				 function formatState(value) {
+					 return (value || 'idle').replaceAll('_', ' ').replace(/\b\w/g, c => c.toUpperCase());
+				 }
+				 function renderLogs(logs) {
+					 const logBox = byId('log');
+					 logBox.textContent = logs.length ? logs.join('\n') : 'No log entries yet.';
+					 logBox.scrollTop = logBox.scrollHeight;
+				 }
+				 async function refreshLogs() {
+					 if (logRefreshInFlight || refreshInFlight || restarting) return;
+					 logRefreshInFlight = true;
+					 try {
+						 const snapshot = await api('/api/logs');
+						 renderLogs(snapshot.lines || []);
+						 lastLogUpdatedAt = snapshot.updatedAt;
+					 } catch (error) { console.error('Log refresh failed', error); }
+					 finally { logRefreshInFlight = false; }
+				 }
+				 function applyStatus(status) {
+					 const poweringOn = (status.powerState || '').startsWith('power_on_');
+					 const powerAppearsOn = status.pcOn || poweringOn;
+					 const pc = byId('pc');
+					 pc.textContent = status.pcOn ? 'ON' : (poweringOn ? 'STARTING' : 'OFF');
+					 pc.className = powerAppearsOn ? 'on' : 'off';
+					 byId('powerState').textContent = formatState(status.powerState);
+					 byId('powerBadge').textContent = status.busy ? 'Operation active' : (status.pcOn ? 'System online' : 'System offline');
+					 byId('powerBadge').className = 'badge' + (powerAppearsOn ? ' active' : '');
+					 pcIsOn = status.pcOn;
+					 const powerToggle = byId('powerToggleBtn');
+					 powerToggle.className = 'control-button power-toggle' + (powerAppearsOn ? ' online' : '');
+					 powerToggle.disabled = status.busy;
+					 powerToggle.setAttribute('aria-label', status.pcOn ? 'Shut down BC250' : 'Power on BC250');
+					 powerToggle.title = status.pcOn ? 'Shut down BC250' : 'Power on BC250';
+					 byId('scanState').textContent = status.scanning ? 'Scanning…' : 'Idle';
+					 byId('scanState').className = 'badge' + (status.scanning ? ' active' : '');
+					 byId('activitySummary').textContent = status.scanning ? 'Scanning' : (status.busy ? 'Power task' : 'Idle');
+					 byId('restartBtn').disabled = status.pcOn || status.busy;
+					 byId('scanBtn').disabled = status.scanning || !scanCanDiscover();
+					 const wifiStatusBadge = byId('wifiStatusBadge');
+					 if (status.lanIp) {
+						 wifiStatusBadge.textContent = 'Connected';
+						 wifiStatusBadge.className = 'badge wifi-status-badge connected';
+					 } else if (!wifiSsidConfigured) {
+						 wifiStatusBadge.textContent = 'Setup AP';
+						 wifiStatusBadge.className = 'badge wifi-status-badge ap';
+					 } else {
+						 wifiStatusBadge.textContent = status.wifi === 'idle' ? 'Connecting' : formatState(status.wifi);
+						 wifiStatusBadge.className = 'badge wifi-status-badge ' + (status.wifi === 'idle' ? 'pending' : 'error');
+					 }
+					 byId('networkSummary').textContent = status.lanIp ? 'LAN' : 'AP';
+					 byId('networkIp').textContent = status.ip || 'No address';
+					 byId('lastUpdate').textContent = 'Updated ' + new Date().toLocaleTimeString([], {hour:'2-digit', minute:'2-digit', second:'2-digit'});
+					 byId('liveText').textContent = 'Live';
+					 byId('liveDot').className = 'dot online';
+					 if (lastLogUpdatedAt !== null && status.logUpdatedAt !== lastLogUpdatedAt) refreshLogs();
+				 }
+                 async function refreshStatus() {
+					 // If page is active
+					 if (document.hidden) return;
+					 if (statusRefreshInFlight || refreshInFlight || restarting) return;
+					 statusRefreshInFlight = true;
+					 try {
+						 const status = await api('/api/status');
+						 applyStatus(status);
+						 // Refresh controller results throughout discovery and once more when the
+						 // scan transitions to idle so devices found near the end are rendered.
+						 if (scanStarted && (status.scanning || scanWasActive)) scheduleRefresh();
+						 scanWasActive = status.scanning;
+					 }
+					 catch (error) { console.error('Status refresh failed', error); }
+					 finally { statusRefreshInFlight = false; }
+				 }
+				 async function refresh() {
+					 if (refreshInFlight) { refreshQueued = true; return; }
+					 refreshInFlight = true;
+					 try {
+						 if (restarting) return;
+						 const foundRequest = scanStarted ? api('/api/found') : Promise.resolve([]);
+						 const [status, paired, found, logSnapshot, wifiConfig] = await Promise.all([api('/api/status'), api('/api/controllers'), foundRequest, api('/api/logs'), api('/api/wifi')]);
+						 wifiSsidConfigured = !!wifiConfig.ssid;
+						 lastLogUpdatedAt = logSnapshot.updatedAt;
+						 applyStatus(status);
+						 byId('controllerCount').textContent = paired.length;
+						 byId('pairedBadge').textContent = paired.length + (paired.length === 1 ? ' device' : ' devices');
+						 byId('lastUpdate').textContent = 'Updated ' + new Date().toLocaleTimeString([], {hour:'2-digit', minute:'2-digit', second:'2-digit'});
+						 byId('liveText').textContent = 'Live';
+						 byId('liveDot').className = 'dot online';
+						 if (!deviceConfigLoaded) {
+							 byId('wifiSsid').value = wifiConfig.ssid;
+							 byId('wifiPassword').placeholder = wifiConfig.hasPassword ? 'Saved password (leave blank to keep)' : 'Leave blank for an open network';
+							 byId('btSpoofMac').value = wifiConfig.classicBtSpoofMac || '';
+							 byId('scanBleEnabled').checked = wifiConfig.bleScanEnabled;
+							 byId('scanClassicInquiryEnabled').checked = wifiConfig.classicInquiryScanEnabled;
+							 byId('scanClassicPairedEnabled').checked = wifiConfig.classicPairedScanEnabled;
+							 applyWebPasswordState(wifiConfig.webPasswordEnabled);
+							 deviceConfigLoaded = true;
+						 }
+						 byId('scanBtn').disabled = status.scanning || !scanCanDiscover();
+						 const pairedBox = byId('paired');
+						 pairedBox.replaceChildren();
+						 if (!paired.length) pairedBox.appendChild(empty('No controllers registered yet.'));
+						 paired.forEach(c => pairedBox.appendChild(controllerRow(c, 'Remove', 'danger', button => post('/api/remove', 'Controller removed', {slot:c.slot}, button), 'Rename', button => renameController(c, button))));
+						 const foundBox = byId('found');
+						 foundBox.replaceChildren();
+						 if (!scanStarted) foundBox.appendChild(empty('Start a scan to find nearby controllers.'));
+						 else if (!found.length) foundBox.appendChild(empty(status.scanning ? 'Listening for nearby controllers…' : 'No controllers found in this scan.'));
+						 found.forEach(c => foundBox.appendChild(controllerRow(c, 'Pair', '', button => post('/api/pair', 'Controller paired', {mac:c.mac}, button))));
+						 renderLogs(logSnapshot.lines || []);
+					 } catch (error) {
+						 console.error('Refresh failed', error);
+						 byId('liveText').textContent = 'Disconnected';
+						 byId('liveDot').className = 'dot offline';
+						 byId('lastUpdate').textContent = 'Refresh failed';
+					 } finally {
+						 refreshInFlight = false;
+						 if (refreshQueued) { refreshQueued = false; scheduleRefresh(); }
+					 }
+				 }
+				 setInterval(refreshStatus, 1500);
+				 scheduleRefresh();
+			</script>
+	 </body>
+</html>
