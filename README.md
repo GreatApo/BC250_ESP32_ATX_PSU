@@ -9,7 +9,7 @@ An ESP32-based power controller (with 2 relays) for a BC-250 motherboard running
 
 ## Features
 
-- Provides physical-button power-on and normal-shutdown controls.
+- Provides short-press physical-button power toggling and a long-press emergency power cut.
 - Controls an ATX PSU and BC-250 motherboard on/off.
 - Powers on the BC-250 when a registered gamepad is detected over BLE or Bluetooth Classic.
 - Provides web-UI power control, live state, gamepad management, and a rolling event log.
@@ -36,7 +36,9 @@ When a known controller is detected, or power-on is requested from the button or
 5. Keeps `PS_ON` asserted while the PC is running.
 6. Releases both relays if startup is not confirmed.
 
-For a normal shutdown, it pulses the motherboard power-button input and leaves the PSU enabled while the operating system shuts down. Once the monitor input remains low and shutdown is confirmed, it releases `PS_ON`. Controller-triggered wake is ignored for 60 seconds after shutdown to avoid accidental wake loops.
+For a normal shutdown, including a short case-button press while the PC is on, it pulses the motherboard power-button input and leaves the PSU enabled while the operating system shuts down. Once the monitor input remains low and shutdown is confirmed, it releases `PS_ON`. Controller-triggered wake is ignored for 60 seconds after shutdown to avoid accidental wake loops.
+
+Holding the case button for at least 3 seconds bypasses the normal shutdown sequence and immediately releases both relays to cut ATX power. This can cause data loss and should only be used when the PC cannot shut down normally.
 
 ## Hardware requirements
 
@@ -148,7 +150,7 @@ The main adjustable values are:
 | `WAKE_COOLDOWN_MS` | 15 s | Suppresses repeated wake requests after detection |
 | `SHUTDOWN_COOLDOWN_MS` | 60 s | Blocks controller wake immediately after shutdown |
 | `WEB_SCAN_DURATION_MS` | 15 s | Length of a controller scan started in the portal |
-| `POWER_OFF_HOLD_MS` | 3 s | Physical-button hold required for shutdown |
+| `POWER_CUT_HOLD_MS` | 3 s | Physical-button hold required for an immediate ATX power cut |
 | `PSU_SETTLE_BEFORE_PWR_SW_MS` | 1 s | Delay between `PS_ON` and motherboard button pulse |
 | `POWER_BUTTON_PRESS_MS` | 500 ms | Motherboard button pulse length |
 | `STARTUP_CONFIRM_TIMEOUT_MS` | 15 s | Maximum time to detect a successful startup |
@@ -265,9 +267,10 @@ Some devices use private or rotating BLE addresses. Those devices may not wake r
 | Input | Result |
 | --- | --- |
 | Short press while PC is off | Starts the ATX power-on sequence |
-| Hold for at least 3 seconds while PC is on | Pulses the motherboard button for a normal shutdown |
+| Short press while PC is on | Pulses the motherboard button for a normal shutdown |
+| Hold for at least 3 seconds | Immediately releases both relays to cut ATX power |
 
-The sketch performs two short LED blinks when accepting a short press or the long-press threshold. The LED toggles every 250 ms continuously; it is therefore best treated as an activity/heartbeat indicator rather than a direct PC-power indicator.
+The sketch performs two short LED blinks when accepting a short press or the long-press threshold. A forced power cut bypasses the operating system shutdown and may cause data loss. The LED toggles every 250 ms continuously; it is therefore best treated as an activity/heartbeat indicator rather than a direct PC-power indicator.
 
 ## Default behavior and safeguards
 

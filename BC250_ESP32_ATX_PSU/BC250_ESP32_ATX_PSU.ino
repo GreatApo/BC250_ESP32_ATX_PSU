@@ -81,7 +81,7 @@ const unsigned long WAKE_COOLDOWN_MS = 15000;           // Ignore controllers br
 const unsigned long SHUTDOWN_COOLDOWN_MS = 60000;       // Ignore controllers briefly after shutdown
 const unsigned long WEB_SCAN_DURATION_MS = 15000;       // Stop webpage BLE scans after this long
 
-const unsigned long POWER_OFF_HOLD_MS = 3000;           // Hold physical button this long to turn the PC off
+const unsigned long POWER_CUT_HOLD_MS = 3000;           // Hold physical button this long to cut ATX power
 
 const unsigned long CONFIRM_BLINK_MS = 100;             // LED on/off duration for 2-blink confirmations
 const unsigned long BLINK_COOLDOWN_MS = 500;            // Skip status LED blinking briefly after a confirmation blink
@@ -193,7 +193,8 @@ enum PowerState {
     POWER_ON_PRESS_BUTTON,
     POWER_ON_CONFIRM,
     POWER_OFF_PRESS_BUTTON,
-    POWER_OFF_WAIT_FOR_OFF
+    POWER_OFF_WAIT_FOR_OFF,
+    POWER_CUT_WAIT_FOR_OFF
 };
 
 PowerState powerState = POWER_IDLE;
@@ -302,6 +303,15 @@ bool startNormalShutdown() {
     return true;
 }
 
+void cutAtxPower() {
+    addLog("STATE - Cutting ATX power immediately...");
+    digitalWrite(RELAY_PWR_PIN, RELAY_OFF);
+    digitalWrite(RELAY_PSU_PIN, RELAY_OFF);
+    powerState = POWER_CUT_WAIT_FOR_OFF;
+    powerStateStartedAt = millis();
+    lastShutdownTime = powerStateStartedAt;
+}
+
 void handlePowerState() {
     unsigned long now = millis();
 
@@ -361,6 +371,17 @@ void handlePowerState() {
                 powerState = POWER_IDLE;
             } else {
                 powerStateStartedAt = now;
+            }
+            break;
+
+        case POWER_CUT_WAIT_FOR_OFF:
+            // Keep both relays released until the monitor confirms that the PC
+            // is off. Returning to idle sooner would reassert PS_ON below.
+            digitalWrite(RELAY_PWR_PIN, RELAY_OFF);
+            digitalWrite(RELAY_PSU_PIN, RELAY_OFF);
+            if (!stablePcOn) {
+                addLog("STATE - Forced power cut confirmed - PC is now off.");
+                powerState = POWER_IDLE;
             }
             break;
 
@@ -900,15 +921,11 @@ void handleButton(unsigned long now) {
         // Skip if long press has already been handled.
         if (!shutdownPress) {
             // Check if long press
-            if (pressDuration >= POWER_OFF_HOLD_MS) {
-                if(powerState == POWER_IDLE){
-                    blinkConfirmation();
-                    addLog("BUTTON - LONG PRESS (" + String(pressDuration) + "ms) - Normal shutdown.");
-                    startNormalShutdown();
-                    shutdownPress = true;
-                }else{
-                    addLog("BUTTON PRESSED (" + String(pressDuration) + "ms) - Power operation already in progress...");
-                }
+            if (pressDuration >= POWER_CUT_HOLD_MS) {
+                blinkConfirmation();
+                addLog("BUTTON - LONG PRESS (" + String(pressDuration) + "ms) - Forced power cut.");
+                cutAtxPower();
+                shutdownPress = true;
             }else{
                 addLog("BUTTON PRESSED (" + String(pressDuration) + "ms) - No action.");
             }
@@ -918,13 +935,20 @@ void handleButton(unsigned long now) {
         if (buttonPressStartTime > 0) {
             unsigned long pressDuration = now - buttonPressStartTime;
 
-            if (pressDuration < POWER_OFF_HOLD_MS) {
+            if (pressDuration < POWER_CUT_HOLD_MS) {
                 // Short press detected
+                // Toggle the PC using its normal power-button path.
                 blinkConfirmation();
-                if (startAtxPowerOnSequence()) {
+                if (stablePcOn) {
+                    if (startNormalShutdown()) {
+                        addLog("BUTTON RELEASED (" + String(pressDuration) + "ms) - Normal shutdown.");
+                    } else {
+                        addLog("BUTTON RELEASED (" + String(pressDuration) + "ms) - Shutdown rejected (operation already in progress).");
+                    }
+                } else if (startAtxPowerOnSequence()) {
                     addLog("BUTTON RELEASED (" + String(pressDuration) + "ms) - Power on.");
                 } else {
-                    addLog("BUTTON RELEASED (" + String(pressDuration) + "ms) - Power on rejected (PC already on or operation in progress).");
+                    addLog("BUTTON RELEASED (" + String(pressDuration) + "ms) - Power on rejected (operation already in progress).");
                 }
             }else{
                 addLog("BUTTON RELEASED (" + String(pressDuration) + "ms) - No action.");
