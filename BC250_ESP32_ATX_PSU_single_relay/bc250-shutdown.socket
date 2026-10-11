@@ -1,0 +1,17 @@
+[Unit]
+Description=Shutdown trigger socket for ESP32 power controller (Option C)
+# Listens on LAN port 8080; GET /poweroff triggers bc250-shutdown.service.
+# If 8080 is taken by something else, change the port here AND in the
+# sketch's OS_SHUTDOWN_URL.
+
+[Socket]
+ListenStream=8080
+# Optional hardening: pin to the Ethernet interface so the port only exists
+# when the link is up (keeps the ESP32's HTTP request from hanging for the
+# full 2.5 s timeout when the OS is halfway down). Find your interface with
+# `ip -br link`, then uncomment:
+# BindToDevice=enp1s0
+Accept=no
+
+[Install]
+WantedBy=sockets.target
