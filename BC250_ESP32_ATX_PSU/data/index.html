@@ -129,7 +129,7 @@
 
 				.overview {
 					display: grid;
-					grid-template-columns: 1.35fr repeat(3, 1fr);
+					grid-template-columns: 1.35fr repeat(4, 1fr);
 					gap: 12px;
 					margin-bottom: 12px;
 				}
@@ -171,6 +171,13 @@
 					gap: 8px;
 					font-size: 1.3rem;
 					font-weight: 750;
+				}
+
+				.metric .sensor-graph {
+					display: block;
+					width: 100%;
+					height: 34px;
+					margin-top: 4px;
 				}
 
 				.metric-value small {
@@ -978,8 +985,19 @@
 									Activity
 							 </div>
 							 <div class="metric-value"><span id="activitySummary">Idle</span><small id="lastUpdate">Not updated</small></div>
-						</div>
-				 </section>
+							 </div>
+							 <div class="card metric">
+							 <div class="metric-label">
+							 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+							 <path d="M14 4v10.5a4 4 0 1 1-4 0V4a2 2 0 1 1 4 0Z"/>
+							 </svg>
+							 Case
+							 </div>
+							 <div class="metric-value"><span id="caseTemp">—</span><small id="caseHumidity">no sensor</small></div>
+							 <small id="casePressure" style="color:var(--muted);font-size:.72rem;margin-top:2px;"></small>
+							 <canvas id="caseTempGraph" class="sensor-graph" width="240" height="34" hidden></canvas>
+							 </div>
+							 </section>
 				 <div class="layout">
 						<div class="stack">
 							 <section class="card panel">
@@ -1457,6 +1475,64 @@
 					 byId('liveDot').className = 'dot online';
 					 if (lastLogUpdatedAt !== null && status.logUpdatedAt !== lastLogUpdatedAt) refreshLogs();
 				 }
+                 // ---- Case sensors (AHT20+BMP280 via /api/sensors) ----
+                 let sensorRefreshInFlight = false;
+                 let lastSensorFetchAt = 0;
+                 const tempHistory = [];
+                 const TEMP_HISTORY_MAX = 120; // ~10 min at the 5 s cadence
+                 let tempGraphShown = false;
+                 async function refreshSensors() {
+                 if (document.hidden || sensorRefreshInFlight) return;
+                 const nowMs = Date.now();
+                 if (nowMs - lastSensorFetchAt < 5000) return;
+                 lastSensorFetchAt = nowMs;
+                 sensorRefreshInFlight = true;
+                 try {
+                 const s = await api('/api/sensors');
+                 if (s.temperatureC === null || s.temperatureC === undefined) {
+                 byId('caseTemp').textContent = '—';
+                 byId('caseHumidity').textContent = s.bmp280 || s.aht20 ? 'waiting' : 'no sensor';
+                 return;
+                 }
+                 byId('caseTemp').textContent = s.temperatureC.toFixed(1) + '°C';
+                 byId('caseHumidity').textContent = (s.humidityPct !== null && s.humidityPct !== undefined) ? (s.humidityPct.toFixed(0) + '% RH') : ((s.pressureHpa !== null && s.pressureHpa !== undefined) ? (s.pressureHpa.toFixed(0) + ' hPa') : '');
+                 byId('casePressure').textContent = (s.pressureHpa !== null && s.pressureHpa !== undefined) ? (s.pressureHpa.toFixed(1) + ' hPa') : '';
+                 tempHistory.push(s.temperatureC);
+                 if (tempHistory.length > TEMP_HISTORY_MAX) tempHistory.shift();
+                 if (!tempGraphShown) { byId('caseTempGraph').hidden = false; tempGraphShown = true; }
+                 drawTempGraph();
+                 }
+                 catch (error) { console.error('Sensor refresh failed', error); }
+                 finally { sensorRefreshInFlight = false; }
+                 }
+                 function drawTempGraph() {
+                 const canvas = byId('caseTempGraph');
+                 if (!canvas || tempHistory.length < 2) return;
+                 const w = canvas.width, h = canvas.height;
+                 const ctx = canvas.getContext('2d');
+                 const style = getComputedStyle(document.documentElement);
+                 const accent = style.getPropertyValue('--blue').trim() || '#4c91ff';
+                 const gridLine = style.getPropertyValue('--line').trim() || '#243244';
+                 ctx.clearRect(0, 0, w, h);
+                 let min = Math.min(...tempHistory), max = Math.max(...tempHistory);
+                 if (max - min < 1) { const mid = (max + min) / 2; min = mid - 0.5; max = mid + 0.5; }
+                 else { const pad = (max - min) * 0.15; min -= pad; max += pad; }
+                 ctx.strokeStyle = gridLine;
+                 ctx.lineWidth = 1;
+                 ctx.beginPath();
+                 ctx.moveTo(0, h - 1);
+                 ctx.lineTo(w, h - 1);
+                 ctx.stroke();
+                 ctx.strokeStyle = accent;
+                 ctx.lineWidth = 1.5;
+                 ctx.beginPath();
+                 tempHistory.forEach((t, i) => {
+                 const x = (i / (tempHistory.length - 1)) * w;
+                 const y = h - 2 - ((t - min) / (max - min)) * (h - 4);
+                 if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+                 });
+                 ctx.stroke();
+                 }
                  async function refreshStatus() {
 					 // If page is active
 					 if (document.hidden) return;
@@ -1465,6 +1541,7 @@
 					 try {
 						 const status = await api('/api/status');
 						 applyStatus(status);
+						 refreshSensors();
 						 // Refresh controller results throughout discovery and once more when the
 						 // scan transitions to idle so devices found near the end are rendered.
 						 if (scanStarted && (status.scanning || scanWasActive)) scheduleRefresh();

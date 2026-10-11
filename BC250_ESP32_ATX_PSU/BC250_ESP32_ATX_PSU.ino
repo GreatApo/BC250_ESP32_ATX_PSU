@@ -4,6 +4,7 @@
 #include <BLEAdvertisedDevice.h>
 #include <Preferences.h>
 #include <WiFi.h>
+#include <HTTPClient.h>
 #include <LittleFS.h>
 #include <ESPmDNS.h>
 #include <string.h>
@@ -12,18 +13,62 @@
 #include "esp_mac.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
+#include <Wire.h>
+#include <Adafruit_Sensor.h>
+#include <Adafruit_BMP280.h>
+#include <Adafruit_AHTX0.h>
 
 struct HttpRequest;
 
+// Case sensor (BMP280, optional) — defined before setup(), forward-declared here.
+void updateCaseSensor();
+String sensorsJson();
+
 // ================= PIN SETTINGS =================
-const int RELAY_PWR_PIN = 17;     // (Left relay) BC-250 power button pin + TPMS1 pin 17 (GND)
-const int RELAY_PSU_PIN = 16;     // (Right relay) ATX PS_ON green wire to PSU GND
+// SINGLE-RELAY VARIANT (Option C) — now on the upstream 2-channel board
+// ("ESP32 Relay X2-style", the guide's stock hardware) after the X1_V1.1 was
+// retired (solder bridges shorted button+GND -> phantom held press -> 3s force-cut).
+// X2 map is authoritative from the upstream sketch/README:
+//   GPIO16 = RIGHT relay (active-high) = our PS_ON switch; GPIO17 = LEFT relay.
+//   Onboard status LED = GPIO23, onboard button = GPIO0 (leave alone — strapping/BOOT).
+//   GPIO17/RELAY_PWR_PIN stays UNWIRED — single-relay method retained.
+//   Powered from ATX +5VSB (purple) + black GND: grounds common through the PSU,
+//   NO GND bond wire needed (that rule was X1 mains-feed only).
+//   Wiring:
+//   - Relay COM -> ATX green PS_ON, relay NO -> any ATX black GND
+//   - Case power button -> GPIO 19 + GND
+//   - BC250 TPMS1 pin 9 (3.3V PC-on) -> GPIO 4
+//   - Board power 5V + GND -> ATX purple +5VSB / black GND
+const int RELAY_PWR_PIN = 17;     // unwired in single-relay variant (X2 left relay)
+const int RELAY_PSU_PIN = 16;     // X2 right relay, active-high (PS_ON switch)
 const int BUTTON_PIN = 19;        // Case power button
 const int LED_PIN = 23;           // LED
+const int PC_PWR_LED_PIN = 18;    // case PLED mirror: HIGH when stablePcOn (single-relay variant)
 const int PC_MONITOR_PIN = 4;     // BC250 TPMS1 pin 9 (3V - PC Monitor)
 
 const int RELAY_ON = HIGH;
 const int RELAY_OFF = LOW;
+
+// ================= CASE SENSOR (BMP280+AHT20 over I2C, optional) =================
+// Example wiring: VCC->3V3, GND->GND, SDA->GPIO21, SCL->GPIO22.
+// Any output-capable pair works on ESP32 (21/22 are just conventional);
+// GPIO 34-39 are INPUT-ONLY — never put I2C there.
+const int SENSOR_SDA_PIN = 21;
+const int SENSOR_SCL_PIN = 22;
+const unsigned long SENSOR_POLL_INTERVAL_MS = 2000;
+Adafruit_BMP280 bmp;
+bool bmpReady = false;
+unsigned long lastSensorPollMs = 0;
+float lastTemperatureC = NAN;
+float lastPressureHpa = NAN;
+// AHT20 (humidity + 2nd temp die) shares the same I2C bus at 0x38. Its
+// measurement cycle blocks ~75 ms, so poll it 5x slower than the BMP280.
+Adafruit_AHTX0 aht;
+bool ahtReady = false;
+const unsigned long AHT_POLL_INTERVAL_MS = 10000;
+unsigned long lastAhtPollMs = 0;
+float lastAhtTemperatureC = NAN;
+float lastHumidityPct = NAN;
 
 // ================= WIFI / WEB UI SETTINGS =================
 // These are first-boot defaults. Values saved from the webpage take priority.
@@ -240,6 +285,7 @@ void updatePcState(unsigned long now) {
     if (newPcState == stablePcOn) return;
 
     stablePcOn = newPcState;
+    digitalWrite(PC_PWR_LED_PIN, stablePcOn ? HIGH : LOW);   // mirror to case PLED
 
     if (stablePcOn) {
         addLog("STATE - PC ON");
@@ -282,6 +328,47 @@ bool startAtxPowerOnSequence() {
     return true;
 }
 
+// ---- BC250 single-relay variant (patched) ---------------------------------
+// Option C: the relay switches ATX PS_ON (green wire) to ground. Startup uses
+// the BC-250 AUTO_PWRON1 jumper (pins 1-2: boot when power is applied), so no
+// motherboard power-button relay exists. Shutdown asks the running OS to power
+// off over HTTP (see bc250-shutdown.socket / bc250-shutdown.service); the stock
+// state machine then releases PS_ON once the monitor pin confirms OFF.
+// ---------------------------------------------------------------------------
+// The bc250 has two NICs with two addresses (wlan0 10.1.0.53, enp7s0 10.1.0.54,
+// both DHCP-reserved on the UDM). The systemd socket listens on all interfaces,
+// so whichever one is alive answers :8080 — try both, first hit wins.
+const char* OS_SHUTDOWN_URLS[] = {
+    "http://10.1.0.53:8080/poweroff",  // bc250 wlan0 (wifi)
+    "http://10.1.0.54:8080/poweroff"   // bc250 enp7s0 (wired)
+};
+const unsigned long OS_SHUTDOWN_HTTP_TIMEOUT_MS = 2500;
+
+bool osRequestShutdown() {
+    // Best-effort HTTP GET to the bc250 shutdown socket on each known address.
+    // The stock POWER_OFF_WAIT_FOR_OFF state covers us if every request fails:
+    // PS_ON is force-dropped after SHUTDOWN_TIMEOUT_MS (120 s).
+    for (const char* url : OS_SHUTDOWN_URLS) {
+        HTTPClient http;
+        http.setConnectTimeout(OS_SHUTDOWN_HTTP_TIMEOUT_MS);
+        http.setTimeout(OS_SHUTDOWN_HTTP_TIMEOUT_MS);
+        if (!http.begin(url)) {
+            addLog(String("STATE - WARNING: could not parse shutdown URL: ") + url);
+            continue;
+        }
+        int code = http.GET();
+        http.end();
+        if (code > 0) {
+            String msg = String("STATE - OS shutdown request sent (HTTP ") + code + " via " + url + ")";
+            addLog(msg);
+            return true;
+        }
+        String msg = String("STATE - WARNING: OS shutdown request failed (") + http.errorToString(code) + "): " + url;
+        addLog(msg);
+    }
+    return false;
+}
+
 bool startNormalShutdown() {
     if (!stablePcOn) {
         addLog("STATE - PC already off.");
@@ -293,10 +380,10 @@ bool startNormalShutdown() {
         return false;
     }
 
-    addLog("STATE - Pulsing motherboard power button for normal shutdown...");
+    addLog("STATE - Requesting OS shutdown over HTTP...");
     // Arm the controller wake lockout immediately. Waiting until the monitor
     // pin reports OFF leaves a window where controller adverts can restart the PC.
-    digitalWrite(RELAY_PWR_PIN, RELAY_ON);
+    osRequestShutdown();
     powerState = POWER_OFF_PRESS_BUTTON;
     powerStateStartedAt = millis();
     lastShutdownTime = powerStateStartedAt;
@@ -2058,6 +2145,8 @@ void handleWebServer() {
         handleWebPasswordSave(client, body);
     } else if (method == "GET" && target == "/api/status") {
         handleApiStatus(client);
+    } else if (method == "GET" && target == "/api/sensors") {
+        sendJson(client, 200, sensorsJson());
     } else if (method == "GET" && target == "/api/controllers") {
         sendJson(client, 200, controllersJson());
     } else if (method == "GET" && target == "/api/found") {
@@ -2159,6 +2248,43 @@ void monitorWiFi(unsigned long now) {
 }
 
 // ================= SETUP =================
+void updateCaseSensor() {
+    unsigned long now = millis();
+    if (bmpReady && now - lastSensorPollMs >= SENSOR_POLL_INTERVAL_MS) {
+        lastSensorPollMs = now;
+        float t = bmp.readTemperature();
+        if (!isnan(t)) lastTemperatureC = t;
+        float p = bmp.readPressure() / 100.0f;
+        if (!isnan(p)) lastPressureHpa = p;
+    }
+    if (ahtReady && now - lastAhtPollMs >= AHT_POLL_INTERVAL_MS) {
+        lastAhtPollMs = now;
+        sensors_event_t humidity, temp;
+        aht.getEvent(&humidity, &temp);
+        if (!isnan(humidity.relative_humidity)) lastHumidityPct = humidity.relative_humidity;
+        if (!isnan(temp.temperature)) lastAhtTemperatureC = temp.temperature;
+    }
+}
+
+String sensorsJson() {
+    String json = "{\"sensor\":\"aht20+bmp280\",\"bmp280\":";
+    json += (bmpReady ? "true" : "false");
+    json += ",\"aht20\":";
+    json += (ahtReady ? "true" : "false");
+    json += ",\"temperatureC\":";
+    json += (bmpReady && !isnan(lastTemperatureC)) ? String(lastTemperatureC, 1) : String("null");
+    json += ",\"pressureHpa\":";
+    json += (bmpReady && !isnan(lastPressureHpa)) ? String(lastPressureHpa, 1) : String("null");
+    json += ",\"ahtTemperatureC\":";
+    json += (ahtReady && !isnan(lastAhtTemperatureC)) ? String(lastAhtTemperatureC, 1) : String("null");
+    json += ",\"humidityPct\":";
+    json += (ahtReady && !isnan(lastHumidityPct)) ? String(lastHumidityPct, 1) : String("null");
+    json += ",\"uptimeMs\":";
+    json += String(millis());
+    json += "}";
+    return json;
+}
+
 void setup() {
     Serial.begin(115200);
     delay(1000);
@@ -2180,10 +2306,33 @@ void setup() {
     digitalWrite(RELAY_PWR_PIN, RELAY_OFF);
 
     pinMode(LED_PIN, OUTPUT);
+    pinMode(PC_PWR_LED_PIN, OUTPUT);
+    digitalWrite(PC_PWR_LED_PIN, LOW);
     digitalWrite(LED_PIN, LOW);
 
     pinMode(BUTTON_PIN, INPUT_PULLUP);
     pinMode(PC_MONITOR_PIN, INPUT_PULLDOWN);
+
+    // Case sensor: BMP280 over I2C. Optional hardware — absent = endpoint
+    // reports null and the loop skips polling. Try both common addresses.
+    Wire.begin(SENSOR_SDA_PIN, SENSOR_SCL_PIN);
+    bmpReady = bmp.begin(BMP280_ADDRESS_ALT) || bmp.begin(BMP280_ADDRESS);
+    if (bmpReady) {
+        bmp.setSampling(Adafruit_BMP280::MODE_NORMAL, Adafruit_BMP280::SAMPLING_X2,
+                        Adafruit_BMP280::SAMPLING_X16, Adafruit_BMP280::FILTER_X16,
+                        Adafruit_BMP280::STANDBY_MS_63);
+        addLog("Sensor - BMP280 ready on I2C (SDA " + String(SENSOR_SDA_PIN) +
+               ", SCL " + String(SENSOR_SCL_PIN) + ").");
+    } else {
+        addLog("Sensor - BMP280 not found (optional, continuing without).");
+    }
+    // AHT20 on the same bus (0x38) — humidity + second temperature die.
+    ahtReady = aht.begin();
+    if (ahtReady) {
+        addLog("Sensor - AHT20 ready on I2C (0x38).");
+    } else {
+        addLog("Sensor - AHT20 not found (optional, continuing without).");
+    }
 
     // Read the initial PC state at boot and sync ATX PSU relay to it.
     bool initialPcState = digitalRead(PC_MONITOR_PIN) == HIGH;
@@ -2192,6 +2341,7 @@ void setup() {
     pcMonitor.changedAt = millis();
     stablePcOn = initialPcState;
     digitalWrite(RELAY_PSU_PIN, stablePcOn ? RELAY_ON : RELAY_OFF);
+    digitalWrite(PC_PWR_LED_PIN, stablePcOn ? HIGH : LOW);   // sync PLED mirror at boot
 
     preferences.begin(CONFIG_NAMESPACE, true);
     StoredControllerConfig storedControllers = {};
@@ -2278,6 +2428,7 @@ void loop() {
 
     handleButton(now);
     updateStatusLed(now);
+    updateCaseSensor();
     monitorWiFi(now);
     protectSetupApClient();
     handleWebServer();
