@@ -104,6 +104,21 @@ Use the normally-open contacts of the relay controlled by `GPIO 17`:
 
 - Connect the BC250 3.3V “PC on” signal to `GPIO 4`.
 
+### Case environment sensors (optional)
+
+The sketch optionally reads an **AHT20 + BMP280** combo module (or either chip alone) over I2C and exposes the readings in the web interface and via `GET /api/sensors`:
+
+| Sensor module | Connects to |
+|---|---|
+| VCC | 3V3 |
+| GND | GND |
+| SDA | GPIO 21 |
+| SCL | GPIO 22 |
+
+Any output-capable GPIO pair works (change `SENSOR_SDA_PIN` / `SENSOR_SCL_PIN`); GPIO 34-39 are input-only and cannot be used. The BMP280 (temperature + pressure) is polled every 2 s, the AHT20 (humidity + a second temperature die) every 10 s. With no sensor attached the sketch logs a notice and the endpoint reports `null` values — everything else works unchanged.
+
+The overview page shows a fifth card with temperature, relative humidity, pressure, and a ~10-minute temperature sparkline.
+
 ## Configure the sketch
 
 Open [`BC250_ESP32_ATX_PSU.ino`](BC250_ESP32_ATX_PSU/BC250_ESP32_ATX_PSU.ino) and review the settings near the top before compiling.
