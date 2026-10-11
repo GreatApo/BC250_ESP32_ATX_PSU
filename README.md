@@ -40,6 +40,24 @@ For a normal shutdown, including a short case-button press while the PC is on, i
 
 Holding the case button for at least 3 seconds bypasses the normal shutdown sequence and immediately releases both relays to cut ATX power. This can cause data loss and should only be used when the PC cannot shut down normally.
 
+## Single-relay variant
+
+A single-relay adaptation lives in [`BC250_ESP32_ATX_PSU_single_relay/`](BC250_ESP32_ATX_PSU_single_relay/). Instead of pulsing a motherboard power-button relay for shutdown, it:
+
+- relies on the BC-250 `AUTO_PWRON1` jumper (pins 1-2, the default) so the board boots itself as soon as PSU power appears — no power-button relay is needed at all;
+- asks the running OS to power off over HTTP (`GET http://<pc>:8080/poweroff`), handled by a small systemd socket unit included in the variant folder (`bc250-shutdown.socket` / `bc250-shutdown.service`);
+- keeps the stock state machine for everything else, including the 120 s force-cut when the OS never responds and the 3-second-hold hard cut;
+- mirrors the monitored PC state on a case power LED (PLED) driven from GPIO18 through a 330 ohm resistor.
+
+Wiring is otherwise identical to the main sketch (PS_ON relay on GPIO16, case button on GPIO19, monitor on TPMS1 pin 9 to GPIO4), except the `RELAY_PWR_PIN`/GPIO17 relay contacts stay unwired and the controller board can be powered from the ATX +5VSB. Put your machine's address(es) in `OS_SHUTDOWN_URLS`, reserve them in DHCP, and enable the socket unit on the PC:
+
+```bash
+sudo -S -p '' cp bc250-shutdown.socket bc250-shutdown.service /etc/systemd/system/
+sudo -S -p '' systemctl daemon-reload && sudo -S -p '' systemctl enable --now bc250-shutdown.socket
+```
+
+The relay click sequence, power-on with monitor-pin confirmation, and the HTTP graceful-shutdown path have been verified on real hardware.
+
 ## Hardware requirements
 
 - An original ESP32 with Wi-Fi, BLE, and Bluetooth Classic support.

@@ -1,0 +1,7 @@
+[Unit]
+Description=Power off BC250 when ESP32 power controller requests it
+# Triggered by bc250-shutdown.socket on GET /poweroff.
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/systemctl poweroff
